@@ -10,21 +10,31 @@ pub struct Insn {
     pub op_str: String,
 }
 
-pub fn disassemble(code: &[u8], base_addr: u64, is_64: bool, count: usize) -> Result<Vec<Insn>> {
-    let cs = if is_64 {
-        Capstone::new()
+pub fn disassemble(code: &[u8], base_addr: u64, arch: &str, count: usize) -> Result<Vec<Insn>> {
+    let cs = match arch {
+        "x86_64" => Capstone::new()
             .x86()
             .mode(arch::x86::ArchMode::Mode64)
             .syntax(arch::x86::ArchSyntax::Intel)
             .detail(false)
-            .build()
-    } else {
-        Capstone::new()
+            .build(),
+        "x86" => Capstone::new()
             .x86()
             .mode(arch::x86::ArchMode::Mode32)
             .syntax(arch::x86::ArchSyntax::Intel)
             .detail(false)
-            .build()
+            .build(),
+        "aarch64" => Capstone::new()
+            .arm64()
+            .mode(arch::arm64::ArchMode::Arm)
+            .detail(false)
+            .build(),
+        "arm" => Capstone::new()
+            .arm()
+            .mode(arch::arm::ArchMode::Arm)
+            .detail(false)
+            .build(),
+        _ => anyhow::bail!("unsupported architecture for disassembly: {}", arch),
     }
     .map_err(|e| anyhow::anyhow!("capstone init: {:?}", e))?;
 

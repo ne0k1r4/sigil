@@ -3,6 +3,8 @@ mod disasm;
 mod hashes;
 mod report;
 mod sigs;
+#[cfg(test)]
+mod tests;
 
 use analyzer::{
     analyze, categorize_strings, code_section, import_tuples,
@@ -353,10 +355,10 @@ fn main() -> Result<()> {
 
         Commands::Disasm { path, count, json } => {
             let info = analyze(&path)?;
-            let (off, sz, base, is64) = code_section(&path)?;
+            let (off, sz, base, arch) = code_section(&path)?;
             let data = fs::read(&path)?;
             let code = data.get(off..off + sz).unwrap_or(&[]);
-            let insns = disasm::disassemble(code, base, is64, count)?;
+            let insns = disasm::disassemble(code, base, &arch, count)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&insns)?);
             } else {
@@ -394,7 +396,7 @@ fn main() -> Result<()> {
             let ha = hashes::compute(&a)?;
             let hb = hashes::compute(&b)?;
 
-            // Import diff
+            // diff the imports
             let a_imports: std::collections::HashSet<String> = ia.imports.iter()
                 .map(|i| format!("{}!{}", i.library, i.function)).collect();
             let b_imports: std::collections::HashSet<String> = ib.imports.iter()
@@ -402,7 +404,7 @@ fn main() -> Result<()> {
             let only_a: Vec<&String> = a_imports.difference(&b_imports).collect();
             let only_b: Vec<&String> = b_imports.difference(&a_imports).collect();
 
-            // Section diff
+            // diff the sections
             let a_secs: std::collections::HashMap<&str, &analyzer::SectionInfo> =
                 ia.sections.iter().map(|s| (s.name.as_str(), s)).collect();
             let b_secs: std::collections::HashMap<&str, &analyzer::SectionInfo> =

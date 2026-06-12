@@ -65,6 +65,21 @@ pub fn analyze(path: &str) -> Result<BinaryInfo> {
     }
 }
 
+fn rva_to_file_offset(pe: &goblin::pe::PE, rva: u64) -> Option<u64> {
+    for section in &pe.sections {
+        let start = section.virtual_address as u64;
+        let mut v_sz = section.virtual_size as u64;
+        if v_sz == 0 {
+            v_sz = section.size_of_raw_data as u64;
+        }
+        let end = start + v_sz;
+        if rva >= start && rva < end {
+            return Some(rva - start + section.pointer_to_raw_data as u64);
+        }
+    }
+    None
+}
+
 fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Result<BinaryInfo> {
     let arch = if pe.is_64 { "x86_64" } else { "x86" }.to_string();
     let mut headers = vec![
@@ -92,11 +107,59 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         })
         .collect();
 
-    // TLS callbacks from the TLS directory
-    let tls_callbacks: Vec<String> = pe.sections.iter()
-        .filter(|s| String::from_utf8_lossy(&s.name).trim_matches('\0') == ".tls")
-        .map(|s| format!("TLS section at VA 0x{:x} size {}", s.virtual_address, s.size_of_raw_data))
-        .collect();
+    let mut tls_callbacks: Vec<String> = Vec::new();
+    if let Some(opt) = &pe.header.optional_header {
+        if let Some(tls_dir) = opt.data_directories.get_tls_table() {
+            if tls_dir.virtual_address > 0 && tls_dir.size > 0 {
+                if let Some(offset) = rva_to_file_offset(pe, tls_dir.virtual_address as u64) {
+                    let offset = offset as usize;
+                    if pe.is_64 {
+                        if let Some(addr_of_callbacks_bytes) = data.get(offset + 24..offset + 32) {
+                            let addr_of_callbacks = u64::from_le_bytes(addr_of_callbacks_bytes.try_into().unwrap());
+                            if addr_of_callbacks > 0 {
+                                let callbacks_rva = addr_of_callbacks.saturating_sub(pe.image_base as u64);
+                                if let Some(mut callbacks_offset) = rva_to_file_offset(pe, callbacks_rva) {
+                                    loop {
+                                        if let Some(cb_bytes) = data.get(callbacks_offset as usize..callbacks_offset as usize + 8) {
+                                            let cb_va = u64::from_le_bytes(cb_bytes.try_into().unwrap());
+                                            if cb_va == 0 {
+                                                break;
+                                            }
+                                            tls_callbacks.push(format!("0x{:x}", cb_va));
+                                            callbacks_offset += 8;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if let Some(addr_of_callbacks_bytes) = data.get(offset + 12..offset + 16) {
+                            let addr_of_callbacks = u32::from_le_bytes(addr_of_callbacks_bytes.try_into().unwrap()) as u64;
+                            if addr_of_callbacks > 0 {
+                                let callbacks_rva = addr_of_callbacks.saturating_sub(pe.image_base as u64);
+                                if let Some(mut callbacks_offset) = rva_to_file_offset(pe, callbacks_rva) {
+                                    loop {
+                                        if let Some(cb_bytes) = data.get(callbacks_offset as usize..callbacks_offset as usize + 4) {
+                                            let cb_va = u32::from_le_bytes(cb_bytes.try_into().unwrap()) as u64;
+                                            if cb_va == 0 {
+                                                break;
+                                            }
+                                            tls_callbacks.push(format!("0x{:x}", cb_va));
+                                            callbacks_offset += 4;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let sections: Vec<SectionInfo> = pe.sections.iter()
         .map(|s| {
@@ -239,15 +302,24 @@ pub fn extract_strings(data: &[u8]) -> Vec<String> {
 }
 
 pub fn categorize_strings(strings: &[String]) -> CategorizedStrings {
-    let url_re   = regex::Regex::new(r"(?i)https?://[^\s]{4,}").unwrap();
-    let ip_re    = regex::Regex::new(r"\b(\d{1,3}\.){3}\d{1,3}(:\d+)?\b").unwrap();
-    let reg_re   = regex::Regex::new(r"(?i)(HKEY_|HKLM|HKCU|HKCR|SOFTWARE\\|SYSTEM\\)").unwrap();
-    let path_re  = regex::Regex::new(r"(?i)([A-Za-z]:\\|/proc/|/sys/|/dev/|/etc/)").unwrap();
-    let guid_re  = regex::Regex::new(r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}").unwrap();
+    use std::sync::OnceLock;
+    use regex::Regex;
+
+    static URL_RE: OnceLock<Regex> = OnceLock::new();
+    static IP_RE: OnceLock<Regex> = OnceLock::new();
+    static REG_RE: OnceLock<Regex> = OnceLock::new();
+    static PATH_RE: OnceLock<Regex> = OnceLock::new();
+    static GUID_RE: OnceLock<Regex> = OnceLock::new();
+
+    let url_re = URL_RE.get_or_init(|| Regex::new(r"(?i)https?://[^\s]{4,}").unwrap());
+    let ip_re = IP_RE.get_or_init(|| Regex::new(r"\b(\d{1,3}\.){3}\d{1,3}(:\d+)?\b").unwrap());
+    let reg_re = REG_RE.get_or_init(|| Regex::new(r"(?i)(HKEY_|HKLM|HKCU|HKCR|SOFTWARE\\|SYSTEM\\)").unwrap());
+    let path_re = PATH_RE.get_or_init(|| Regex::new(r"(?i)([A-Za-z]:\\|/proc/|/sys/|/dev/|/etc/)").unwrap());
+    let guid_re = GUID_RE.get_or_init(|| Regex::new(r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}").unwrap());
 
     let mut cats = CategorizedStrings { urls: vec![], ips: vec![], registry: vec![], paths: vec![], guids: vec![], other: vec![] };
     for s in strings {
-        if s.len() > 150 { continue; } // skip concatenated blobs
+        if s.len() > 150 { continue; } // skip long junk blobs
         if url_re.is_match(s)  { cats.urls.push(s.clone()); }
         else if ip_re.is_match(s)   { cats.ips.push(s.clone()); }
         else if reg_re.is_match(s)  { cats.registry.push(s.clone()); }
@@ -258,7 +330,7 @@ pub fn categorize_strings(strings: &[String]) -> CategorizedStrings {
     cats
 }
 
-/// Search binary for a hex pattern with `??` wildcards. Returns list of offsets.
+/// search for hex pattern, ?? is wildcard
 pub fn pattern_search(data: &[u8], pattern: &str) -> Result<Vec<usize>> {
     let tokens: Vec<&str> = pattern.split_whitespace().collect();
     if tokens.is_empty() { anyhow::bail!("empty pattern"); }
@@ -269,12 +341,12 @@ pub fn pattern_search(data: &[u8], pattern: &str) -> Result<Vec<usize>> {
                 Ok(b) => Some(b),
                 Err(_) => {
                     eprintln!("sigil: invalid hex token '{}' in pattern — expected XX or ??", t);
-                    Some(0xFF) // placeholder; caller will see error msg
+                    Some(0xFF) // error placeholder
                 }
             }
         }
     }).collect();
-    // Reject if any token was not valid hex and not a wildcard
+    // check if hex is valid
     for (i, t) in tokens.iter().enumerate() {
         if *t != "??" && *t != "?" && u8::from_str_radix(t, 16).is_err() {
             anyhow::bail!("invalid hex token '{}' — use format: '48 8B ?? ??' ", t);
@@ -294,8 +366,8 @@ pub fn pattern_search(data: &[u8], pattern: &str) -> Result<Vec<usize>> {
     Ok(hits)
 }
 
-/// Returns (offset, size, base_addr, is_64) for the first executable section
-pub fn code_section(path: &str) -> Result<(usize, usize, u64, bool)> {
+/// finds the first executable section
+pub fn code_section(path: &str) -> Result<(usize, usize, u64, String)> {
     let data = fs::read(path)?;
     match Object::parse(&data)? {
         Object::PE(pe) => {
@@ -304,7 +376,8 @@ pub fn code_section(path: &str) -> Result<(usize, usize, u64, bool)> {
                     let off = s.pointer_to_raw_data as usize;
                     let sz = s.size_of_raw_data as usize;
                     let va = pe.image_base as u64 + s.virtual_address as u64;
-                    return Ok((off, sz, va, pe.is_64));
+                    let arch = if pe.is_64 { "x86_64" } else { "x86" }.to_string();
+                    return Ok((off, sz, va, arch));
                 }
             }
             anyhow::bail!("no executable section found")
@@ -312,7 +385,14 @@ pub fn code_section(path: &str) -> Result<(usize, usize, u64, bool)> {
         Object::Elf(elf) => {
             for sh in &elf.section_headers {
                 if sh.sh_flags & 0x4 != 0 && sh.sh_size > 0 {
-                    return Ok((sh.sh_offset as usize, sh.sh_size as usize, sh.sh_addr, elf.is_64));
+                    let arch = match elf.header.e_machine {
+                        goblin::elf::header::EM_X86_64 => "x86_64",
+                        goblin::elf::header::EM_386   => "x86",
+                        goblin::elf::header::EM_AARCH64 => "aarch64",
+                        goblin::elf::header::EM_ARM   => "arm",
+                        _ => "unknown",
+                    }.to_string();
+                    return Ok((sh.sh_offset as usize, sh.sh_size as usize, sh.sh_addr, arch));
                 }
             }
             anyhow::bail!("no executable section found")

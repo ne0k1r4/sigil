@@ -19,8 +19,8 @@ pub fn compute(path: &str) -> Result<Hashes> {
     Ok(Hashes { md5, sha256, imphash })
 }
 
-/// PE imphash: MD5 of lowercased "lib.func,lib.func,..." sorted by import order
-fn compute_imphash(data: &[u8]) -> Option<String> {
+/// standard PE imphash: md5 of "lib.func" sorted by order of imports
+pub fn compute_imphash(data: &[u8]) -> Option<String> {
     match Object::parse(data).ok()? {
         Object::PE(pe) => {
             let entries: Vec<String> = pe.imports.iter().map(|i| {

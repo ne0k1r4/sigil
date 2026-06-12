@@ -102,13 +102,13 @@ static ANTICHEAT_STRINGS: &[(&str, &str)] = &[
     ("\\\\GLOBALROOT",              "Device path (driver comms)"),
 ];
 
-/// Match sig against individual strings — returns a short window around the match.
+/// checks if the sig is in the strings, returns a nice 80-char window around it
 fn match_strings(strings: &[String], sig: &str) -> Option<String> {
     let sig_lo = sig.to_lowercase();
     for s in strings {
         let s_lo = s.to_lowercase();
         if let Some(pos) = s_lo.find(&sig_lo) {
-            // Return a 80-char window centered on the match
+            // grab 80 chars centered on the match
             let start = pos.saturating_sub(20);
             let end = (pos + sig.len() + 40).min(s.len());
             let window = &s[start..end];
