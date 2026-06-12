@@ -1,0 +1,20 @@
+[package]
+name = "sigil"
+version = "0.2.0"
+edition = "2021"
+
+[[bin]]
+name = "sigil"
+path = "src/main.rs"
+
+[dependencies]
+clap       = { version = "4.5.4",   features = ["derive"] }
+goblin     = "0.8.2"
+colored    = "2.1.0"
+anyhow     = "1.0.86"
+serde      = { version = "1.0.203", features = ["derive"] }
+serde_json = "1.0.117"
+capstone   = "0.11.0"
+md5        = "0.7.0"
+sha2       = "0.10.8"
+regex      = "1.10.4"
