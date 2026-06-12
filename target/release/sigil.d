@@ -1,1 +1,0 @@
-/home/LIGHT/dev/projects/sigil/target/release/sigil: /home/LIGHT/dev/projects/sigil/src/analyzer.rs /home/LIGHT/dev/projects/sigil/src/disasm.rs /home/LIGHT/dev/projects/sigil/src/hashes.rs /home/LIGHT/dev/projects/sigil/src/main.rs /home/LIGHT/dev/projects/sigil/src/report.rs /home/LIGHT/dev/projects/sigil/src/sigs.rs
