@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use goblin::Object;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::sync::OnceLock;
 
 // Maximum file size accepted (256 MB) — prevents OOM on adversarial input
 pub const MAX_FILE_SIZE: u64 = 256 * 1024 * 1024;
@@ -58,13 +60,14 @@ pub struct CategorizedStrings {
     pub other: Vec<String>,
 }
 
-/// Read and validate a binary file, enforcing the size cap.
-pub fn read_file(path: &str) -> Result<Vec<u8>> {
+/// Read and validate a binary file.
+/// Set `no_size_limit = true` to bypass the 256 MB cap (e.g. for large firmware blobs).
+pub fn read_file(path: &str, no_size_limit: bool) -> Result<Vec<u8>> {
     let meta = fs::metadata(path)
         .with_context(|| format!("cannot stat '{}'", path))?;
-    if meta.len() > MAX_FILE_SIZE {
+    if !no_size_limit && meta.len() > MAX_FILE_SIZE {
         anyhow::bail!(
-            "file is {:.1} MB — exceeds the {:.0} MB safety cap; use --no-size-limit to override",
+            "file is {:.1} MB — exceeds the {:.0} MB safety cap; pass --no-size-limit to override",
             meta.len() as f64 / 1_048_576.0,
             MAX_FILE_SIZE as f64 / 1_048_576.0,
         );
@@ -74,8 +77,8 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 
 /// Analyse a binary, returning the parsed info *and* the raw bytes so callers
 /// can pass them on to packing_hints / hashes without re-reading the file.
-pub fn analyze(path: &str) -> Result<(BinaryInfo, Vec<u8>)> {
-    let data = read_file(path)?;
+pub fn analyze(path: &str, no_size_limit: bool) -> Result<(BinaryInfo, Vec<u8>)> {
+    let data = read_file(path, no_size_limit)?;
     let entropy = shannon_entropy(&data);
     let info = match Object::parse(&data)? {
         Object::PE(pe) => parse_pe(path, &pe, &data, entropy),
@@ -341,17 +344,18 @@ pub fn extract_strings(data: &[u8], min_len: usize) -> Vec<String> {
     results
 }
 
+static RE_URL:  OnceLock<Regex> = OnceLock::new();
+static RE_IP:   OnceLock<Regex> = OnceLock::new();
+static RE_REG:  OnceLock<Regex> = OnceLock::new();
+static RE_PATH: OnceLock<Regex> = OnceLock::new();
+static RE_GUID: OnceLock<Regex> = OnceLock::new();
+
 pub fn categorize_strings(strings: &[String]) -> CategorizedStrings {
-    let url_re = regex::Regex::new(r"(?i)https?://[^\s]{4,}").unwrap();
-    let ip_re = regex::Regex::new(r"\b(\d{1,3}\.){3}\d{1,3}(:\d+)?\b").unwrap();
-    let reg_re =
-        regex::Regex::new(r"(?i)(HKEY_|HKLM|HKCU|HKCR|SOFTWARE\\|SYSTEM\\)").unwrap();
-    let path_re =
-        regex::Regex::new(r"(?i)([A-Za-z]:\\|/proc/|/sys/|/dev/|/etc/)").unwrap();
-    let guid_re = regex::Regex::new(
-        r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}",
-    )
-    .unwrap();
+    let url_re  = RE_URL.get_or_init(|| Regex::new(r"(?i)https?://[^\s]{4,}").unwrap());
+    let ip_re   = RE_IP.get_or_init(|| Regex::new(r"\b(\d{1,3}\.){3}\d{1,3}(:\d+)?\b").unwrap());
+    let reg_re  = RE_REG.get_or_init(|| Regex::new(r"(?i)(HKEY_|HKLM|HKCU|HKCR|SOFTWARE\\|SYSTEM\\)").unwrap());
+    let path_re = RE_PATH.get_or_init(|| Regex::new(r"(?i)([A-Za-z]:\\|/proc/|/sys/|/dev/|/etc/)").unwrap());
+    let guid_re = RE_GUID.get_or_init(|| Regex::new(r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}").unwrap());
 
     let mut cats = CategorizedStrings {
         urls: vec![],
