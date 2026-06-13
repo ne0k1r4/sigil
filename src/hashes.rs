@@ -2,7 +2,6 @@ use anyhow::Result;
 use sha2::{Digest as _, Sha256};
 use goblin::Object;
 use serde::{Deserialize, Serialize};
-use std::fs;
 
 use crate::analyzer::read_file;
 
