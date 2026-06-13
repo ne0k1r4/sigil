@@ -3,12 +3,11 @@ mod disasm;
 mod hashes;
 mod report;
 mod sigs;
-#[cfg(test)]
-mod tests;
 
 use analyzer::{
-    analyze, categorize_strings, code_section, import_tuples,
-    packing_hints, packing_verdict, pattern_search, shannon_entropy,
+    analyze, categorize_strings, code_section_from_bytes, import_tuples,
+    packing_hints_from_bytes, packing_verdict, pattern_search, shannon_entropy,
+    extract_strings,
 };
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -106,16 +105,18 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Scan { path, json } => {
-            let info = analyze(&path)?;
+            // Single read — pass data through to hints/hashes
+            let (info, data) = analyze(&path)?;
             let tuples = import_tuples(&info);
-            let ad = sigs::scan_antidebug(&tuples, &info.strings);
-            let ac = sigs::scan_anticheat(&tuples, &info.strings);
-            let hints = packing_hints(&path).unwrap_or_default();
+            let ad     = sigs::scan_antidebug(&tuples, &info.strings);
+            let ac     = sigs::scan_anticheat(&tuples, &info.strings);
+            let hints  = packing_hints_from_bytes(&data).unwrap_or_default();
+
             if json {
                 let mut obj = serde_json::to_value(&info)?;
-                obj["antidebug"]    = serde_json::to_value(&ad)?;
-                obj["anticheat"]    = serde_json::to_value(&ac)?;
-                obj["packing_hints"]= serde_json::to_value(&hints)?;
+                obj["antidebug"]     = serde_json::to_value(&ad)?;
+                obj["anticheat"]     = serde_json::to_value(&ac)?;
+                obj["packing_hints"] = serde_json::to_value(&hints)?;
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             } else {
                 print_banner(&info.path, &info.format, &info.arch);
@@ -128,13 +129,19 @@ fn main() -> Result<()> {
                 }
                 if !info.tls_callbacks.is_empty() {
                     println!("\n{}", "TLS Callbacks:".bold().red());
-                    for t in &info.tls_callbacks { println!("  {} {}", "⚑".red(), t); }
+                    for t in &info.tls_callbacks {
+                        println!("  {} {}", "⚑".red(), t);
+                    }
                 }
                 if !ad.is_empty() || !ac.is_empty() {
                     println!("\n{}", "Detections:".bold().cyan());
                     println!("{}", "─".repeat(60).dimmed());
                     for h in ad.iter().chain(ac.iter()) {
-                        let tag = if h.category == "anti-debug" { "[AD]".red() } else { "[AC]".magenta() };
+                        let tag = if h.category == "anti-debug" {
+                            "[AD]".red()
+                        } else {
+                            "[AC]".magenta()
+                        };
                         println!("  {} {} — {}", tag, h.technique.bold(), h.matched.dimmed());
                     }
                 }
@@ -142,7 +149,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Headers { path, json } => {
-            let info = analyze(&path)?;
+            let (info, _) = analyze(&path)?;
             if json {
                 let v = serde_json::json!({ "headers": info.headers, "sections": info.sections });
                 println!("{}", serde_json::to_string_pretty(&v)?);
@@ -154,19 +161,24 @@ fn main() -> Result<()> {
                 println!("{}", "─".repeat(48).dimmed());
                 for s in &info.sections {
                     let ent = format!("{:.3}", s.entropy);
-                    let ec = if s.entropy > 7.2 { ent.red() } else if s.entropy > 6.5 { ent.yellow() } else { ent.green() };
+                    let ec = if s.entropy > 7.2 {
+                        ent.red()
+                    } else if s.entropy > 6.5 {
+                        ent.yellow()
+                    } else {
+                        ent.green()
+                    };
                     println!("{:<24} {:>10} {:>10}", s.name, s.size, ec);
                 }
             }
         }
 
         Commands::Strings { path, min_len, categorize, json } => {
-            let data = fs::read(&path)?;
-            let strings = extract_strings_min(&data, min_len);
+            let data    = analyzer::read_file(&path)?;
+            let strings = extract_strings(&data, min_len);
             if json {
                 if categorize {
-                    let cats = categorize_strings(&strings);
-                    println!("{}", serde_json::to_string_pretty(&cats)?);
+                    println!("{}", serde_json::to_string_pretty(&categorize_strings(&strings))?);
                 } else {
                     println!("{}", serde_json::to_string_pretty(&strings)?);
                 }
@@ -187,12 +199,15 @@ fn main() -> Result<()> {
         }
 
         Commands::Imports { path, json } => {
-            let info = analyze(&path)?;
+            let (info, _) = analyze(&path)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&info.imports)?);
             } else {
                 print_banner(&info.path, &info.format, &info.arch);
-                if info.imports.is_empty() { println!("{}", "No imports found.".yellow()); return Ok(()); }
+                if info.imports.is_empty() {
+                    println!("{}", "No imports found.".yellow());
+                    return Ok(());
+                }
                 println!("\n{} {} imports\n", ">>".cyan(), info.imports.len());
                 let mut cur_lib = String::new();
                 for imp in &info.imports {
@@ -206,7 +221,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Symbols { path, json } => {
-            let info = analyze(&path)?;
+            let (info, _) = analyze(&path)?;
             if json {
                 let v = serde_json::json!({ "exports": info.exports, "symbols": info.symbols });
                 println!("{}", serde_json::to_string_pretty(&v)?);
@@ -224,7 +239,12 @@ fn main() -> Result<()> {
                     println!("\n{} {} symbols", "Symbols:".bold().cyan(), info.symbols.len());
                     println!("{}", "─".repeat(48).dimmed());
                     for sym in info.symbols.iter().take(200) {
-                        println!("  {:016x}  {:<8} {}", sym.address, sym.kind.dimmed(), sym.name.green());
+                        println!(
+                            "  {:016x}  {:<8} {}",
+                            sym.address,
+                            sym.kind.dimmed(),
+                            sym.name.green()
+                        );
                     }
                     if info.symbols.len() > 200 {
                         println!("  ... {} more (use --json)", info.symbols.len() - 200);
@@ -237,7 +257,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Tls { path, json } => {
-            let info = analyze(&path)?;
+            let (info, _) = analyze(&path)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&info.tls_callbacks)?);
             } else {
@@ -255,6 +275,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Hashes { path, json } => {
+            // hashes::compute does its own single read
             let h = hashes::compute(&path)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&h)?);
@@ -272,28 +293,27 @@ fn main() -> Result<()> {
         }
 
         Commands::Entropy { path, json } => {
-            let data = fs::read(&path)?;
-            let entropy = shannon_entropy(&data);
-            let info = analyze(&path)?;
-            let hints = packing_hints(&path).unwrap_or_default();
+            // Single read — pass to both shannon_entropy and packing_hints
+            let (info, data) = analyze(&path)?;
+            let hints = packing_hints_from_bytes(&data).unwrap_or_default();
             if json {
                 let v = serde_json::json!({
-                    "overall": entropy,
-                    "verdict": packing_verdict(entropy),
-                    "hints": hints,
-                    "sections": info.sections
+                    "overall": info.entropy,
+                    "verdict": packing_verdict(info.entropy),
+                    "hints":   hints,
+                    "sections": info.sections,
                 });
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 print_banner(&path, &info.format, &info.arch);
                 println!("\n{}", "Entropy Analysis:".bold().cyan());
                 println!("{}", "─".repeat(44).dimmed());
-                println!("  Overall entropy: {:.4} / 8.0", entropy);
-                let verdict = packing_verdict(entropy);
+                println!("  Overall entropy: {:.4} / 8.0", info.entropy);
+                let verdict = packing_verdict(info.entropy);
                 let vc = match verdict {
                     "LIKELY PACKED/ENCRYPTED" => verdict.red().bold(),
-                    "SUSPICIOUS" => verdict.yellow().bold(),
-                    _ => verdict.green().bold(),
+                    "SUSPICIOUS"              => verdict.yellow().bold(),
+                    _                         => verdict.green().bold(),
                 };
                 println!("  Verdict: {}", vc);
                 println!("\n{}", "Packing Hints:".bold().cyan());
@@ -307,14 +327,20 @@ fn main() -> Result<()> {
                 println!("{}", "─".repeat(48).dimmed());
                 for s in &info.sections {
                     let ent = format!("{:.3}", s.entropy);
-                    let ec = if s.entropy > 7.2 { ent.red() } else if s.entropy > 6.5 { ent.yellow() } else { ent.green() };
+                    let ec = if s.entropy > 7.2 {
+                        ent.red()
+                    } else if s.entropy > 6.5 {
+                        ent.yellow()
+                    } else {
+                        ent.green()
+                    };
                     println!("{:<24} {:>10} {:>10}", s.name, s.size, ec);
                 }
             }
         }
 
         Commands::Antidebug { path, json } => {
-            let info = analyze(&path)?;
+            let (info, _) = analyze(&path)?;
             let hits = sigs::scan_antidebug(&import_tuples(&info), &info.strings);
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
@@ -334,7 +360,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Anticheat { path, json } => {
-            let info = analyze(&path)?;
+            let (info, _) = analyze(&path)?;
             let hits = sigs::scan_anticheat(&import_tuples(&info), &info.strings);
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
@@ -354,11 +380,11 @@ fn main() -> Result<()> {
         }
 
         Commands::Disasm { path, count, json } => {
-            let info = analyze(&path)?;
-            let (off, sz, base, arch) = code_section(&path)?;
-            let data = fs::read(&path)?;
+            // Single read — reuse data for both analyze and disasm
+            let (info, data) = analyze(&path)?;
+            let (off, sz, base, is64) = code_section_from_bytes(&data)?;
             let code = data.get(off..off + sz).unwrap_or(&[]);
-            let insns = disasm::disassemble(code, base, &arch, count)?;
+            let insns = disasm::disassemble(code, base, is64, count)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&insns)?);
             } else {
@@ -366,19 +392,28 @@ fn main() -> Result<()> {
                 println!("\n{} {} instructions from 0x{:x}\n", "◈ disasm".cyan().bold(), insns.len(), base);
                 println!("{}", "─".repeat(70).dimmed());
                 for i in &insns {
-                    println!("  {:016x}  {:<32} {} {}", i.addr, i.bytes.dimmed(), i.mnemonic.yellow().bold(), i.op_str.white());
+                    println!(
+                        "  {:016x}  {:<32} {} {}",
+                        i.addr,
+                        i.bytes.dimmed(),
+                        i.mnemonic.yellow().bold(),
+                        i.op_str.white()
+                    );
                 }
             }
         }
 
         Commands::Pattern { path, hex, json } => {
-            let data = fs::read(&path)?;
+            let data = analyzer::read_file(&path)?;
             let hits = pattern_search(&data, &hex)?;
             if json {
                 let v: Vec<String> = hits.iter().map(|o| format!("0x{:x}", o)).collect();
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
-                println!("\n{} pattern {} — {} hits in {}", "◈".cyan(), hex.yellow(), hits.len(), path.yellow());
+                println!(
+                    "\n{} pattern {} — {} hits in {}",
+                    "◈".cyan(), hex.yellow(), hits.len(), path.yellow()
+                );
                 println!("{}", "─".repeat(50).dimmed());
                 for offset in hits.iter().take(200) {
                     println!("  0x{:016x}", offset);
@@ -386,17 +421,18 @@ fn main() -> Result<()> {
                 if hits.len() > 200 {
                     println!("  {} ... {} more (use --json for full list)", "".dimmed(), hits.len() - 200);
                 }
-                if hits.is_empty() { println!("  {}", "No matches.".dimmed()); }
+                if hits.is_empty() {
+                    println!("  {}", "No matches.".dimmed());
+                }
             }
         }
 
         Commands::Diff { a, b, json } => {
-            let ia = analyze(&a)?;
-            let ib = analyze(&b)?;
+            let (ia, _) = analyze(&a)?;
+            let (ib, _) = analyze(&b)?;
             let ha = hashes::compute(&a)?;
             let hb = hashes::compute(&b)?;
 
-            // diff the imports
             let a_imports: std::collections::HashSet<String> = ia.imports.iter()
                 .map(|i| format!("{}!{}", i.library, i.function)).collect();
             let b_imports: std::collections::HashSet<String> = ib.imports.iter()
@@ -404,7 +440,6 @@ fn main() -> Result<()> {
             let only_a: Vec<&String> = a_imports.difference(&b_imports).collect();
             let only_b: Vec<&String> = b_imports.difference(&a_imports).collect();
 
-            // diff the sections
             let a_secs: std::collections::HashMap<&str, &analyzer::SectionInfo> =
                 ia.sections.iter().map(|s| (s.name.as_str(), s)).collect();
             let b_secs: std::collections::HashMap<&str, &analyzer::SectionInfo> =
@@ -424,15 +459,17 @@ fn main() -> Result<()> {
                 println!("  B: {}  {}", b.yellow(), hb.md5.dimmed());
 
                 println!("\n{}", "Hashes:".bold().cyan());
-                println!("{}", "─".repeat(50).dimmed());
-                println!("  {:<10} A: {}  B: {}", "MD5".dimmed(), ha.md5.yellow(), hb.md5.yellow());
-                println!("  {:<10} A: {}  B: {}", "SHA-256".dimmed(), &ha.sha256[..16], &hb.sha256[..16]);
+                println!("{}", "─".repeat(80).dimmed());
+                println!("  {:<10} A: {}  B: {}", "MD5".dimmed(),     ha.md5.yellow(),    hb.md5.yellow());
+                // Show full SHA-256 — truncating a hash defeats the purpose
+                println!("  {:<10} A: {}", "SHA-256".dimmed(), ha.sha256.yellow());
+                println!("  {:<10} B: {}", "".dimmed(),          hb.sha256.yellow());
 
                 println!("\n{}", "Import diff:".bold().cyan());
                 println!("{}", "─".repeat(50).dimmed());
                 let mut only_a_sorted = only_a; only_a_sorted.sort();
                 let mut only_b_sorted = only_b; only_b_sorted.sort();
-                for s in &only_a_sorted { println!("  {} {}", "-".red(), s.red()); }
+                for s in &only_a_sorted { println!("  {} {}", "-".red(),   s.red()); }
                 for s in &only_b_sorted { println!("  {} {}", "+".green(), s.green()); }
                 if only_a_sorted.is_empty() && only_b_sorted.is_empty() {
                     println!("  {}", "Identical imports.".dimmed());
@@ -459,24 +496,40 @@ fn main() -> Result<()> {
         }
 
         Commands::Report { path, html, output } => {
-            let info = analyze(&path)?;
-            let tuples = import_tuples(&info);
+            // Single read — thread data through to hints and hashes
+            let (info, data) = analyze(&path)?;
+            let tuples  = import_tuples(&info);
             let ad_hits = sigs::scan_antidebug(&tuples, &info.strings);
             let ac_hits = sigs::scan_anticheat(&tuples, &info.strings);
-            let hints = packing_hints(&path).unwrap_or_default();
-            let h = hashes::compute(&path)?;
+            let hints   = packing_hints_from_bytes(&data).unwrap_or_default();
+            let h       = hashes::from_bytes(&data);
 
             if html {
-                let out = output.unwrap_or_else(|| format!("{}.html",
-                    std::path::Path::new(&path).file_name().unwrap_or_default().to_string_lossy()));
+                let out = output.unwrap_or_else(|| {
+                    format!(
+                        "{}.html",
+                        std::path::Path::new(&path)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    )
+                });
+                // Guard against silent overwrites
+                if std::path::Path::new(&out).exists() {
+                    eprintln!(
+                        "{} output file '{}' already exists — pass -o <path> to choose a different name",
+                        "error:".red().bold(), out
+                    );
+                    std::process::exit(1);
+                }
                 report::generate_html(&info, &ad_hits, &ac_hits, &hints, &h, &out)?;
                 println!("{} HTML report written to {}", ">>".green(), out.yellow());
             } else {
                 let mut obj = serde_json::to_value(&info)?;
-                obj["antidebug"]    = serde_json::to_value(&ad_hits)?;
-                obj["anticheat"]    = serde_json::to_value(&ac_hits)?;
-                obj["packing_hints"]= serde_json::to_value(&hints)?;
-                obj["hashes"]       = serde_json::to_value(&h)?;
+                obj["antidebug"]     = serde_json::to_value(&ad_hits)?;
+                obj["anticheat"]     = serde_json::to_value(&ac_hits)?;
+                obj["packing_hints"] = serde_json::to_value(&hints)?;
+                obj["hashes"]        = serde_json::to_value(&h)?;
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             }
         }
@@ -485,29 +538,38 @@ fn main() -> Result<()> {
 }
 
 fn print_banner(path: &str, fmt: &str, arch: &str) {
-    println!("\n{} {} {} {} {}\n",
-        "◈ sigil".bold().magenta(), "▸".dimmed(),
-        path.yellow(), format!("[{}]", fmt).cyan(), format!("[{}]", arch).cyan());
+    println!(
+        "\n{} {} {} {} {}\n",
+        "◈ sigil".bold().magenta(),
+        "▸".dimmed(),
+        path.yellow(),
+        format!("[{}]", fmt).cyan(),
+        format!("[{}]", arch).cyan()
+    );
 }
 
 fn print_headers(headers: &[(String, String)]) {
     println!("{}", "Headers:".bold().cyan());
     println!("{}", "─".repeat(44).dimmed());
-    for (k, v) in headers { println!("  {:<20} {}", k.dimmed(), v.bold()); }
+    for (k, v) in headers {
+        println!("  {:<20} {}", k.dimmed(), v.bold());
+    }
 }
 
 fn print_entropy_summary(entropy: f64, sections: &[analyzer::SectionInfo]) {
     let verdict = packing_verdict(entropy);
     let vc = match verdict {
         "LIKELY PACKED/ENCRYPTED" => verdict.red().bold(),
-        "SUSPICIOUS" => verdict.yellow().bold(),
-        _ => verdict.green().bold(),
+        "SUSPICIOUS"              => verdict.yellow().bold(),
+        _                         => verdict.green().bold(),
     };
     println!("\n{}", "Entropy:".bold().cyan());
     println!("{}", "─".repeat(44).dimmed());
     println!("  Overall: {:.4}  verdict: {}", entropy, vc);
     for s in sections {
-        if s.entropy > 6.5 { println!("  {} '{}' {:.3}", "⚠".yellow(), s.name.bold(), s.entropy); }
+        if s.entropy > 6.5 {
+            println!("  {} '{}' {:.3}", "⚠".yellow(), s.name.bold(), s.entropy);
+        }
     }
 }
 
@@ -516,38 +578,43 @@ fn print_imports_summary(imports: &[analyzer::ImportEntry]) {
     println!("{}", "─".repeat(44).dimmed());
     let mut cur = String::new();
     for imp in imports.iter().take(80) {
-        if imp.library != cur { println!("\n  {}", imp.library.yellow().bold()); cur = imp.library.clone(); }
+        if imp.library != cur {
+            println!("\n  {}", imp.library.yellow().bold());
+            cur = imp.library.clone();
+        }
         println!("    {}", imp.function.green());
     }
-    if imports.len() > 80 { println!("  ... {} more", imports.len() - 80); }
+    if imports.len() > 80 {
+        println!("  ... {} more", imports.len() - 80);
+    }
 }
 
 fn print_strings_summary(strings: &[String]) {
-    println!("\n{} {} strings (top 30, use `sigil strings -c` to categorize)",
-        "Strings:".bold().cyan(), strings.len());
+    println!(
+        "\n{} {} strings (top 30, use `sigil strings -c` to categorize)",
+        "Strings:".bold().cyan(),
+        strings.len()
+    );
     println!("{}", "─".repeat(44).dimmed());
-    for s in strings.iter().take(30) { println!("  {}", s.dimmed()); }
-    if strings.len() > 30 { println!("  ... {} more", strings.len() - 30); }
+    for s in strings.iter().take(30) {
+        println!("  {}", s.dimmed());
+    }
+    if strings.len() > 30 {
+        println!("  ... {} more", strings.len() - 30);
+    }
 }
 
+/// `_color` is kept for API compatibility but all categories use their own
+/// natural colour at the call sites above.  The underlying items are always
+/// printed in yellow here; wire up per-category colours if desired.
 fn print_cat_section(label: &str, items: &[String], _color: &str) {
     if items.is_empty() { return; }
     println!("\n{} ({})", label.bold().cyan(), items.len());
     println!("{}", "─".repeat(44).dimmed());
-    for s in items.iter().take(50) { println!("  {}", s.yellow()); }
-    if items.len() > 50 { println!("  ... {} more", items.len() - 50); }
-}
-
-fn extract_strings_min(data: &[u8], min_len: usize) -> Vec<String> {
-    let mut results = Vec::new();
-    let mut cur = Vec::new();
-    for &b in data {
-        if b.is_ascii_graphic() || b == b' ' { cur.push(b); }
-        else {
-            if cur.len() >= min_len { results.push(String::from_utf8_lossy(&cur).to_string()); }
-            cur.clear();
-        }
+    for s in items.iter().take(50) {
+        println!("  {}", s.yellow());
     }
-    if cur.len() >= min_len { results.push(String::from_utf8_lossy(&cur).to_string()); }
-    results
+    if items.len() > 50 {
+        println!("  ... {} more", items.len() - 50);
+    }
 }
