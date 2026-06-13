@@ -14,8 +14,8 @@ pub struct Hashes {
 }
 
 /// Compute hashes from a path — reads the file once.
-pub fn compute(path: &str) -> Result<Hashes> {
-    let data = read_file(path)?;
+pub fn compute(path: &str, no_size_limit: bool) -> Result<Hashes> {
+    let data = read_file(path, no_size_limit)?;
     Ok(from_bytes(&data))
 }
 
