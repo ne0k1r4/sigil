@@ -5,18 +5,22 @@ mod report;
 mod sigs;
 
 use analyzer::{
-    analyze, categorize_strings, code_section_from_bytes, import_tuples,
-    packing_hints_from_bytes, packing_verdict, pattern_search, shannon_entropy,
-    extract_strings,
+    analyze, categorize_strings, code_section_from_bytes, extract_strings,
+    import_tuples, packing_hints_from_bytes, packing_verdict, pattern_search,
 };
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use std::fs;
 
 #[derive(Parser)]
 #[command(name = "sigil", about = "Static PE/ELF binary analyzer", version = "0.2.0")]
 struct Cli {
+    /// Suppress banner and decorative output (safe for piping / scripting)
+    #[arg(long, global = true)]
+    quiet: bool,
+    /// Bypass the 256 MB file size cap
+    #[arg(long, global = true)]
+    no_size_limit: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -24,15 +28,9 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Full static analysis
-    Scan {
-        path: String,
-        #[arg(long)] json: bool,
-    },
+    Scan   { path: String, #[arg(long)] json: bool },
     /// Show file headers and sections
-    Headers {
-        path: String,
-        #[arg(long)] json: bool,
-    },
+    Headers { path: String, #[arg(long)] json: bool },
     /// Extract and categorize printable strings
     Strings {
         path: String,
@@ -41,40 +39,19 @@ enum Commands {
         #[arg(long)] json: bool,
     },
     /// Show import table
-    Imports {
-        path: String,
-        #[arg(long)] json: bool,
-    },
+    Imports { path: String, #[arg(long)] json: bool },
     /// Show exports and symbols
-    Symbols {
-        path: String,
-        #[arg(long)] json: bool,
-    },
+    Symbols { path: String, #[arg(long)] json: bool },
     /// Show TLS callbacks (anti-cheat execution vectors)
-    Tls {
-        path: String,
-        #[arg(long)] json: bool,
-    },
+    Tls     { path: String, #[arg(long)] json: bool },
     /// Compute MD5 / SHA-256 / imphash
-    Hashes {
-        path: String,
-        #[arg(long)] json: bool,
-    },
+    Hashes  { path: String, #[arg(long)] json: bool },
     /// Entropy + packing analysis
-    Entropy {
-        path: String,
-        #[arg(long)] json: bool,
-    },
+    Entropy { path: String, #[arg(long)] json: bool },
     /// Anti-debug technique detection
-    Antidebug {
-        path: String,
-        #[arg(long)] json: bool,
-    },
+    Antidebug { path: String, #[arg(long)] json: bool },
     /// Anti-cheat engine detection
-    Anticheat {
-        path: String,
-        #[arg(long)] json: bool,
-    },
+    Anticheat { path: String, #[arg(long)] json: bool },
     /// Disassemble code section entry bytes
     Disasm {
         path: String,
@@ -88,11 +65,7 @@ enum Commands {
         #[arg(long)] json: bool,
     },
     /// Diff two binaries (imports / sections / hashes)
-    Diff {
-        a: String,
-        b: String,
-        #[arg(long)] json: bool,
-    },
+    Diff { a: String, b: String, #[arg(long)] json: bool },
     /// Export full report (HTML or JSON)
     Report {
         path: String,
@@ -101,17 +74,26 @@ enum Commands {
     },
 }
 
-fn main() -> Result<()> {
+fn main() {
     let cli = Cli::parse();
-    match cli.command {
+    let quiet = cli.quiet;
+    let nsl   = cli.no_size_limit;
+
+    if let Err(e) = run(cli.command, quiet, nsl) {
+        // All errors go to stderr; never pollute stdout (breaks --json pipelines)
+        eprintln!("{} {:#}", "error:".red().bold(), e);
+        std::process::exit(1);
+    }
+}
+
+fn run(command: Commands, quiet: bool, nsl: bool) -> Result<()> {
+    match command {
         Commands::Scan { path, json } => {
-            // Single read — pass data through to hints/hashes
-            let (info, data) = analyze(&path)?;
+            let (info, data) = analyze(&path, nsl)?;
             let tuples = import_tuples(&info);
             let ad     = sigs::scan_antidebug(&tuples, &info.strings);
             let ac     = sigs::scan_anticheat(&tuples, &info.strings);
             let hints  = packing_hints_from_bytes(&data).unwrap_or_default();
-
             if json {
                 let mut obj = serde_json::to_value(&info)?;
                 obj["antidebug"]     = serde_json::to_value(&ad)?;
@@ -119,7 +101,7 @@ fn main() -> Result<()> {
                 obj["packing_hints"] = serde_json::to_value(&hints)?;
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             } else {
-                print_banner(&info.path, &info.format, &info.arch);
+                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
                 print_headers(&info.headers);
                 print_entropy_summary(info.entropy, &info.sections);
                 print_imports_summary(&info.imports);
@@ -129,19 +111,13 @@ fn main() -> Result<()> {
                 }
                 if !info.tls_callbacks.is_empty() {
                     println!("\n{}", "TLS Callbacks:".bold().red());
-                    for t in &info.tls_callbacks {
-                        println!("  {} {}", "⚑".red(), t);
-                    }
+                    for t in &info.tls_callbacks { println!("  {} {}", "⚑".red(), t); }
                 }
                 if !ad.is_empty() || !ac.is_empty() {
                     println!("\n{}", "Detections:".bold().cyan());
                     println!("{}", "─".repeat(60).dimmed());
                     for h in ad.iter().chain(ac.iter()) {
-                        let tag = if h.category == "anti-debug" {
-                            "[AD]".red()
-                        } else {
-                            "[AC]".magenta()
-                        };
+                        let tag = if h.category == "anti-debug" { "[AD]".red() } else { "[AC]".magenta() };
                         println!("  {} {} — {}", tag, h.technique.bold(), h.matched.dimmed());
                     }
                 }
@@ -149,32 +125,27 @@ fn main() -> Result<()> {
         }
 
         Commands::Headers { path, json } => {
-            let (info, _) = analyze(&path)?;
+            let (info, _) = analyze(&path, nsl)?;
             if json {
-                let v = serde_json::json!({ "headers": info.headers, "sections": info.sections });
-                println!("{}", serde_json::to_string_pretty(&v)?);
+                println!("{}", serde_json::to_string_pretty(
+                    &serde_json::json!({ "headers": info.headers, "sections": info.sections })
+                )?);
             } else {
-                print_banner(&info.path, &info.format, &info.arch);
+                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
                 print_headers(&info.headers);
                 println!("\n{}", "Sections:".bold().cyan());
                 println!("{:<24} {:>10} {:>10}", "Name".dimmed(), "Size".dimmed(), "Entropy".dimmed());
                 println!("{}", "─".repeat(48).dimmed());
                 for s in &info.sections {
                     let ent = format!("{:.3}", s.entropy);
-                    let ec = if s.entropy > 7.2 {
-                        ent.red()
-                    } else if s.entropy > 6.5 {
-                        ent.yellow()
-                    } else {
-                        ent.green()
-                    };
+                    let ec  = entropy_color(s.entropy, &ent);
                     println!("{:<24} {:>10} {:>10}", s.name, s.size, ec);
                 }
             }
         }
 
         Commands::Strings { path, min_len, categorize, json } => {
-            let data    = analyzer::read_file(&path)?;
+            let data    = analyzer::read_file(&path, nsl)?;
             let strings = extract_strings(&data, min_len);
             if json {
                 if categorize {
@@ -184,26 +155,28 @@ fn main() -> Result<()> {
                 }
             } else if categorize {
                 let cats = categorize_strings(&strings);
-                println!("{}", "Categorized Strings:".bold().cyan());
-                print_cat_section("URLs",     &cats.urls,     "cyan");
-                print_cat_section("IPs",      &cats.ips,      "yellow");
-                print_cat_section("Registry", &cats.registry, "red");
-                print_cat_section("Paths",    &cats.paths,    "green");
-                print_cat_section("GUIDs",    &cats.guids,    "magenta");
+                if !quiet { println!("{}", "Categorized Strings:".bold().cyan()); }
+                print_cat_section("URLs",     &cats.urls);
+                print_cat_section("IPs",      &cats.ips);
+                print_cat_section("Registry", &cats.registry);
+                print_cat_section("Paths",    &cats.paths);
+                print_cat_section("GUIDs",    &cats.guids);
                 println!("\n{} {} other strings", "Other:".dimmed(), cats.other.len());
             } else {
-                println!("{} {} strings extracted from {}", ">>".cyan(), strings.len(), path.yellow());
-                println!("{}", "─".repeat(60).dimmed());
+                if !quiet {
+                    println!("{} {} strings from {}", ">>".cyan(), strings.len(), path.yellow());
+                    println!("{}", "─".repeat(60).dimmed());
+                }
                 for s in &strings { println!("{}", s); }
             }
         }
 
         Commands::Imports { path, json } => {
-            let (info, _) = analyze(&path)?;
+            let (info, _) = analyze(&path, nsl)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&info.imports)?);
             } else {
-                print_banner(&info.path, &info.format, &info.arch);
+                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
                 if info.imports.is_empty() {
                     println!("{}", "No imports found.".yellow());
                     return Ok(());
@@ -221,12 +194,13 @@ fn main() -> Result<()> {
         }
 
         Commands::Symbols { path, json } => {
-            let (info, _) = analyze(&path)?;
+            let (info, _) = analyze(&path, nsl)?;
             if json {
-                let v = serde_json::json!({ "exports": info.exports, "symbols": info.symbols });
-                println!("{}", serde_json::to_string_pretty(&v)?);
+                println!("{}", serde_json::to_string_pretty(
+                    &serde_json::json!({ "exports": info.exports, "symbols": info.symbols })
+                )?);
             } else {
-                print_banner(&info.path, &info.format, &info.arch);
+                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
                 if !info.exports.is_empty() {
                     println!("\n{} {} exports", "Exports:".bold().cyan(), info.exports.len());
                     println!("{}", "─".repeat(48).dimmed());
@@ -239,12 +213,7 @@ fn main() -> Result<()> {
                     println!("\n{} {} symbols", "Symbols:".bold().cyan(), info.symbols.len());
                     println!("{}", "─".repeat(48).dimmed());
                     for sym in info.symbols.iter().take(200) {
-                        println!(
-                            "  {:016x}  {:<8} {}",
-                            sym.address,
-                            sym.kind.dimmed(),
-                            sym.name.green()
-                        );
+                        println!("  {:016x}  {:<8} {}", sym.address, sym.kind.dimmed(), sym.name.green());
                     }
                     if info.symbols.len() > 200 {
                         println!("  ... {} more (use --json)", info.symbols.len() - 200);
@@ -257,58 +226,55 @@ fn main() -> Result<()> {
         }
 
         Commands::Tls { path, json } => {
-            let (info, _) = analyze(&path)?;
+            let (info, _) = analyze(&path, nsl)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&info.tls_callbacks)?);
             } else {
-                print_banner(&info.path, &info.format, &info.arch);
+                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
                 println!("\n{}", "TLS Callbacks:".bold().red());
                 println!("{}", "─".repeat(48).dimmed());
                 if info.tls_callbacks.is_empty() {
                     println!("  {}", "No TLS callbacks found.".green());
                 } else {
-                    for t in &info.tls_callbacks {
-                        println!("  {} {}", "⚑".red(), t);
-                    }
+                    for t in &info.tls_callbacks { println!("  {} {}", "⚑".red(), t); }
                 }
             }
         }
 
         Commands::Hashes { path, json } => {
-            // hashes::compute does its own single read
-            let h = hashes::compute(&path)?;
+            let h = hashes::compute(&path, nsl)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&h)?);
             } else {
-                println!("\n{}", "Hashes:".bold().cyan());
-                println!("{}", "─".repeat(72).dimmed());
+                if !quiet {
+                    println!("\n{}", "Hashes:".bold().cyan());
+                    println!("{}", "─".repeat(72).dimmed());
+                }
                 println!("  {:<10} {}", "MD5".dimmed(),     h.md5.yellow());
                 println!("  {:<10} {}", "SHA-256".dimmed(), h.sha256.yellow());
                 if let Some(imp) = &h.imphash {
                     println!("  {:<10} {}", "imphash".dimmed(), imp.yellow());
                 } else {
-                    println!("  {:<10} {}", "imphash".dimmed(), "N/A (no PE imports)".dimmed());
+                    println!("  {:<10} {}", "imphash".dimmed(), "N/A".dimmed());
                 }
             }
         }
 
         Commands::Entropy { path, json } => {
-            // Single read — pass to both shannon_entropy and packing_hints
-            let (info, data) = analyze(&path)?;
+            let (info, data) = analyze(&path, nsl)?;
             let hints = packing_hints_from_bytes(&data).unwrap_or_default();
             if json {
-                let v = serde_json::json!({
-                    "overall": info.entropy,
-                    "verdict": packing_verdict(info.entropy),
-                    "hints":   hints,
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                    "overall":  info.entropy,
+                    "verdict":  packing_verdict(info.entropy),
+                    "hints":    hints,
                     "sections": info.sections,
-                });
-                println!("{}", serde_json::to_string_pretty(&v)?);
+                }))?);
             } else {
-                print_banner(&path, &info.format, &info.arch);
+                if !quiet { print_banner(&path, &info.format, &info.arch); }
                 println!("\n{}", "Entropy Analysis:".bold().cyan());
                 println!("{}", "─".repeat(44).dimmed());
-                println!("  Overall entropy: {:.4} / 8.0", info.entropy);
+                println!("  Overall: {:.4} / 8.0", info.entropy);
                 let verdict = packing_verdict(info.entropy);
                 let vc = match verdict {
                     "LIKELY PACKED/ENCRYPTED" => verdict.red().bold(),
@@ -327,25 +293,19 @@ fn main() -> Result<()> {
                 println!("{}", "─".repeat(48).dimmed());
                 for s in &info.sections {
                     let ent = format!("{:.3}", s.entropy);
-                    let ec = if s.entropy > 7.2 {
-                        ent.red()
-                    } else if s.entropy > 6.5 {
-                        ent.yellow()
-                    } else {
-                        ent.green()
-                    };
+                    let ec  = entropy_color(s.entropy, &ent);
                     println!("{:<24} {:>10} {:>10}", s.name, s.size, ec);
                 }
             }
         }
 
         Commands::Antidebug { path, json } => {
-            let (info, _) = analyze(&path)?;
+            let (info, _) = analyze(&path, nsl)?;
             let hits = sigs::scan_antidebug(&import_tuples(&info), &info.strings);
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
-                print_banner(&info.path, &info.format, &info.arch);
+                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
                 println!("\n{} anti-debug scan — {} hits\n", "◈".red(), hits.len());
                 println!("{}", "─".repeat(60).dimmed());
                 if hits.is_empty() {
@@ -360,12 +320,12 @@ fn main() -> Result<()> {
         }
 
         Commands::Anticheat { path, json } => {
-            let (info, _) = analyze(&path)?;
+            let (info, _) = analyze(&path, nsl)?;
             let hits = sigs::scan_anticheat(&import_tuples(&info), &info.strings);
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
-                print_banner(&info.path, &info.format, &info.arch);
+                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
                 println!("\n{} anti-cheat scan — {} hits\n", "◈".magenta(), hits.len());
                 println!("{}", "─".repeat(60).dimmed());
                 if hits.is_empty() {
@@ -380,63 +340,53 @@ fn main() -> Result<()> {
         }
 
         Commands::Disasm { path, count, json } => {
-            // Single read — reuse data for both analyze and disasm
-            let (info, data) = analyze(&path)?;
+            let (info, data) = analyze(&path, nsl)?;
             let (off, sz, base, is64) = code_section_from_bytes(&data)?;
-            let code = data.get(off..off + sz).unwrap_or(&[]);
+            let code  = data.get(off..off + sz).unwrap_or(&[]);
             let insns = disasm::disassemble(code, base, is64, count)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&insns)?);
             } else {
-                print_banner(&info.path, &info.format, &info.arch);
+                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
                 println!("\n{} {} instructions from 0x{:x}\n", "◈ disasm".cyan().bold(), insns.len(), base);
                 println!("{}", "─".repeat(70).dimmed());
                 for i in &insns {
-                    println!(
-                        "  {:016x}  {:<32} {} {}",
-                        i.addr,
-                        i.bytes.dimmed(),
-                        i.mnemonic.yellow().bold(),
-                        i.op_str.white()
-                    );
+                    println!("  {:016x}  {:<32} {} {}",
+                        i.addr, i.bytes.dimmed(), i.mnemonic.yellow().bold(), i.op_str.white());
                 }
             }
         }
 
         Commands::Pattern { path, hex, json } => {
-            let data = analyzer::read_file(&path)?;
+            let data = analyzer::read_file(&path, nsl)?;
             let hits = pattern_search(&data, &hex)?;
             if json {
                 let v: Vec<String> = hits.iter().map(|o| format!("0x{:x}", o)).collect();
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
-                println!(
-                    "\n{} pattern {} — {} hits in {}",
-                    "◈".cyan(), hex.yellow(), hits.len(), path.yellow()
-                );
-                println!("{}", "─".repeat(50).dimmed());
-                for offset in hits.iter().take(200) {
-                    println!("  0x{:016x}", offset);
+                if !quiet {
+                    println!("\n{} pattern {} — {} hits in {}",
+                        "◈".cyan(), hex.yellow(), hits.len(), path.yellow());
+                    println!("{}", "─".repeat(50).dimmed());
                 }
+                for offset in hits.iter().take(200) { println!("  0x{:016x}", offset); }
                 if hits.len() > 200 {
-                    println!("  {} ... {} more (use --json for full list)", "".dimmed(), hits.len() - 200);
+                    println!("  ... {} more (use --json for full list)", hits.len() - 200);
                 }
-                if hits.is_empty() {
-                    println!("  {}", "No matches.".dimmed());
-                }
+                if hits.is_empty() { println!("  {}", "No matches.".dimmed()); }
             }
         }
 
         Commands::Diff { a, b, json } => {
-            let (ia, _) = analyze(&a)?;
-            let (ib, _) = analyze(&b)?;
-            let ha = hashes::compute(&a)?;
-            let hb = hashes::compute(&b)?;
+            let (ia, _) = analyze(&a, nsl)?;
+            let (ib, _) = analyze(&b, nsl)?;
+            let ha = hashes::compute(&a, nsl)?;
+            let hb = hashes::compute(&b, nsl)?;
 
-            let a_imports: std::collections::HashSet<String> = ia.imports.iter()
-                .map(|i| format!("{}!{}", i.library, i.function)).collect();
-            let b_imports: std::collections::HashSet<String> = ib.imports.iter()
-                .map(|i| format!("{}!{}", i.library, i.function)).collect();
+            let a_imports: std::collections::HashSet<String> =
+                ia.imports.iter().map(|i| format!("{}!{}", i.library, i.function)).collect();
+            let b_imports: std::collections::HashSet<String> =
+                ib.imports.iter().map(|i| format!("{}!{}", i.library, i.function)).collect();
             let only_a: Vec<&String> = a_imports.difference(&b_imports).collect();
             let only_b: Vec<&String> = b_imports.difference(&a_imports).collect();
 
@@ -446,40 +396,40 @@ fn main() -> Result<()> {
                 ib.sections.iter().map(|s| (s.name.as_str(), s)).collect();
 
             if json {
-                let v = serde_json::json!({
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
                     "a": { "path": a, "md5": ha.md5, "sha256": ha.sha256 },
                     "b": { "path": b, "md5": hb.md5, "sha256": hb.sha256 },
                     "imports_only_in_a": only_a,
                     "imports_only_in_b": only_b,
-                });
-                println!("{}", serde_json::to_string_pretty(&v)?);
+                }))?);
             } else {
-                println!("\n{} diff\n", "◈ sigil".bold().magenta());
-                println!("  A: {}  {}", a.yellow(), ha.md5.dimmed());
-                println!("  B: {}  {}", b.yellow(), hb.md5.dimmed());
-
+                if !quiet {
+                    println!("\n{} diff\n", "◈ sigil".bold().magenta());
+                    println!("  A: {}  {}", a.yellow(), ha.md5.dimmed());
+                    println!("  B: {}  {}", b.yellow(), hb.md5.dimmed());
+                }
                 println!("\n{}", "Hashes:".bold().cyan());
                 println!("{}", "─".repeat(80).dimmed());
-                println!("  {:<10} A: {}  B: {}", "MD5".dimmed(),     ha.md5.yellow(),    hb.md5.yellow());
-                // Show full SHA-256 — truncating a hash defeats the purpose
+                println!("  {:<10} A: {}",   "MD5".dimmed(),     ha.md5.yellow());
+                println!("  {:<10} B: {}",   "".dimmed(),         hb.md5.yellow());
                 println!("  {:<10} A: {}", "SHA-256".dimmed(), ha.sha256.yellow());
                 println!("  {:<10} B: {}", "".dimmed(),          hb.sha256.yellow());
 
                 println!("\n{}", "Import diff:".bold().cyan());
                 println!("{}", "─".repeat(50).dimmed());
-                let mut only_a_sorted = only_a; only_a_sorted.sort();
-                let mut only_b_sorted = only_b; only_b_sorted.sort();
-                for s in &only_a_sorted { println!("  {} {}", "-".red(),   s.red()); }
-                for s in &only_b_sorted { println!("  {} {}", "+".green(), s.green()); }
-                if only_a_sorted.is_empty() && only_b_sorted.is_empty() {
+                let mut only_a_s = only_a; only_a_s.sort();
+                let mut only_b_s = only_b; only_b_s.sort();
+                for s in &only_a_s { println!("  {} {}", "-".red(),   s.red()); }
+                for s in &only_b_s { println!("  {} {}", "+".green(), s.green()); }
+                if only_a_s.is_empty() && only_b_s.is_empty() {
                     println!("  {}", "Identical imports.".dimmed());
                 }
 
                 println!("\n{}", "Section entropy diff:".bold().cyan());
                 println!("{}", "─".repeat(50).dimmed());
-                let all_names: std::collections::BTreeSet<&str> =
+                let all: std::collections::BTreeSet<&str> =
                     a_secs.keys().chain(b_secs.keys()).copied().collect();
-                for name in &all_names {
+                for name in &all {
                     match (a_secs.get(name), b_secs.get(name)) {
                         (Some(a), Some(b)) => {
                             let delta = b.entropy - a.entropy;
@@ -496,8 +446,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Report { path, html, output } => {
-            // Single read — thread data through to hints and hashes
-            let (info, data) = analyze(&path)?;
+            let (info, data) = analyze(&path, nsl)?;
             let tuples  = import_tuples(&info);
             let ad_hits = sigs::scan_antidebug(&tuples, &info.strings);
             let ac_hits = sigs::scan_anticheat(&tuples, &info.strings);
@@ -505,25 +454,19 @@ fn main() -> Result<()> {
             let h       = hashes::from_bytes(&data);
 
             if html {
-                let out = output.unwrap_or_else(|| {
-                    format!(
-                        "{}.html",
-                        std::path::Path::new(&path)
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                    )
-                });
-                // Guard against silent overwrites
+                let out = output.unwrap_or_else(|| format!("{}.html",
+                    std::path::Path::new(&path).file_name()
+                        .unwrap_or_default().to_string_lossy()));
                 if std::path::Path::new(&out).exists() {
-                    eprintln!(
-                        "{} output file '{}' already exists — pass -o <path> to choose a different name",
-                        "error:".red().bold(), out
+                    anyhow::bail!(
+                        "output file '{}' already exists — pass -o <path> to choose a different name",
+                        out
                     );
-                    std::process::exit(1);
                 }
                 report::generate_html(&info, &ad_hits, &ac_hits, &hints, &h, &out)?;
-                println!("{} HTML report written to {}", ">>".green(), out.yellow());
+                if !quiet {
+                    println!("{} HTML report written to {}", ">>".green(), out.yellow());
+                }
             } else {
                 let mut obj = serde_json::to_value(&info)?;
                 obj["antidebug"]     = serde_json::to_value(&ad_hits)?;
@@ -537,23 +480,22 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+// ── display helpers ───────────────────────────────────────────────────────────
+
+fn entropy_color<'a>(e: f64, s: &'a str) -> colored::ColoredString {
+    if e > 7.2 { s.red() } else if e > 6.5 { s.yellow() } else { s.green() }
+}
+
 fn print_banner(path: &str, fmt: &str, arch: &str) {
-    println!(
-        "\n{} {} {} {} {}\n",
-        "◈ sigil".bold().magenta(),
-        "▸".dimmed(),
-        path.yellow(),
-        format!("[{}]", fmt).cyan(),
-        format!("[{}]", arch).cyan()
-    );
+    println!("\n{} {} {} {} {}\n",
+        "◈ sigil".bold().magenta(), "▸".dimmed(),
+        path.yellow(), format!("[{}]", fmt).cyan(), format!("[{}]", arch).cyan());
 }
 
 fn print_headers(headers: &[(String, String)]) {
     println!("{}", "Headers:".bold().cyan());
     println!("{}", "─".repeat(44).dimmed());
-    for (k, v) in headers {
-        println!("  {:<20} {}", k.dimmed(), v.bold());
-    }
+    for (k, v) in headers { println!("  {:<20} {}", k.dimmed(), v.bold()); }
 }
 
 fn print_entropy_summary(entropy: f64, sections: &[analyzer::SectionInfo]) {
@@ -584,37 +526,21 @@ fn print_imports_summary(imports: &[analyzer::ImportEntry]) {
         }
         println!("    {}", imp.function.green());
     }
-    if imports.len() > 80 {
-        println!("  ... {} more", imports.len() - 80);
-    }
+    if imports.len() > 80 { println!("  ... {} more", imports.len() - 80); }
 }
 
 fn print_strings_summary(strings: &[String]) {
-    println!(
-        "\n{} {} strings (top 30, use `sigil strings -c` to categorize)",
-        "Strings:".bold().cyan(),
-        strings.len()
-    );
+    println!("\n{} {} strings (top 30, use `sigil strings -c` to categorize)",
+        "Strings:".bold().cyan(), strings.len());
     println!("{}", "─".repeat(44).dimmed());
-    for s in strings.iter().take(30) {
-        println!("  {}", s.dimmed());
-    }
-    if strings.len() > 30 {
-        println!("  ... {} more", strings.len() - 30);
-    }
+    for s in strings.iter().take(30) { println!("  {}", s.dimmed()); }
+    if strings.len() > 30 { println!("  ... {} more", strings.len() - 30); }
 }
 
-/// `_color` is kept for API compatibility but all categories use their own
-/// natural colour at the call sites above.  The underlying items are always
-/// printed in yellow here; wire up per-category colours if desired.
-fn print_cat_section(label: &str, items: &[String], _color: &str) {
+fn print_cat_section(label: &str, items: &[String]) {
     if items.is_empty() { return; }
     println!("\n{} ({})", label.bold().cyan(), items.len());
     println!("{}", "─".repeat(44).dimmed());
-    for s in items.iter().take(50) {
-        println!("  {}", s.yellow());
-    }
-    if items.len() > 50 {
-        println!("  ... {} more", items.len() - 50);
-    }
+    for s in items.iter().take(50) { println!("  {}", s.yellow()); }
+    if items.len() > 50 { println!("  ... {} more", items.len() - 50); }
 }
