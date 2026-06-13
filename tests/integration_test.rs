@@ -16,7 +16,7 @@ fn fixture(name: &str) -> String {
 #[cfg(test)]
 mod analyzer_pe {
     use super::*;
-    use sigil::analyzer::{analyze, packing_verdict, shannon_entropy};
+    use sigil::analyzer::{analyze, packing_verdict};
 
     #[test]
     fn pe_format_detected() {
@@ -162,11 +162,10 @@ mod entropy {
 
     #[test]
     fn random_like_data_high_entropy() {
-        // XOR pattern approximates high entropy
-        let data: Vec<u8> = (0..=255u8).cycle().take(4096)
-            .enumerate().map(|(i, b)| b ^ (i as u8)).collect();
+        // All 256 byte values repeated 16x — uniform distribution, entropy = 8.0
+        let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let h = shannon_entropy(&data);
-        assert!(h > 6.0, "high-entropy data gave {}", h);
+        assert!(h > 7.9, "uniform distribution entropy should be ~8.0, got {}", h);
     }
 
     #[test]
