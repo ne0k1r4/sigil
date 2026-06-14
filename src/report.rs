@@ -60,6 +60,23 @@ pub fn generate_html(
         info.tls_callbacks.iter().map(|t| format!("<tr class=\"danger\"><td>{}</td></tr>", e(t))).collect()
     };
 
+    let rich_section: String = match &info.rich_header {
+        Some(rh) => {
+            let rows: String = rh.entries.iter()
+                .map(|en| format!(
+                    "<tr><td>0x{:08x}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    en.comp_id, en.product_id, en.build_number, en.count
+                ))
+                .collect();
+            format!(
+                "<h2>Rich Header <span class=\"dim\">(hash: {})</span></h2>\n\
+                 <table><thead><tr><th>CompID</th><th>ProductID</th><th>Build</th><th>Count</th></tr></thead><tbody>{}</tbody></table>",
+                e(&rh.hash), rows
+            )
+        }
+        None => String::new(),
+    };
+
     let html = format!(r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -97,6 +114,8 @@ pub fn generate_html(
 <h2>Headers</h2>
 <table><tr>{header_rows}</tr></table>
 
+{rich_section}
+
 <h2>Entropy <span class="badge {verdict_class}">{verdict}</span></h2>
 <p>Overall: <strong>{entropy:.4}</strong> / 8.0</p>
 
@@ -133,6 +152,7 @@ pub fn generate_html(
         header_rows = info.headers.iter()
             .map(|(k, v)| format!("<th>{}</th><td>{}</td>", k, v))
             .collect::<Vec<_>>().join("</tr><tr>"),
+        rich_section = rich_section,
         verdict = verdict,
         verdict_class = verdict_class,
         entropy = info.entropy,
