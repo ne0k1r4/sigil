@@ -194,6 +194,74 @@ pub fn parse_rich_header(data: &[u8], lfanew: u32) -> Option<RichHeaderInfo> {
     Some(RichHeaderInfo { entries, hash })
 }
 
+/// Walk the PE TLS data directory (IMAGE_TLS_DIRECTORY) to enumerate actual
+/// TLS callback virtual addresses. These execute *before* the program's
+/// normal entry point and are a well-known anti-debug / anti-cheat-bypass
+/// execution vector — far more precise than just noting that a `.tls`
+/// section exists.
+///
+/// Returns a list of callback VAs (empty if there is no TLS directory, or
+/// it has no callbacks).
+pub fn parse_tls_callbacks(data: &[u8], lfanew: u32, image_base: u64, sections: &[goblin::pe::section_table::SectionTable]) -> Vec<u64> {
+    let mut callbacks = Vec::new();
+    let lfanew = lfanew as usize;
+
+    // Optional header starts after the 4-byte PE signature and 20-byte COFF header
+    let opt_off = lfanew + 4 + 20;
+    if opt_off + 2 > data.len() {
+        return callbacks;
+    }
+    let magic = r16le(data, opt_off);
+    let is64 = magic == 0x20B;
+
+    // Data directories begin 96 bytes into the optional header for PE32,
+    // or 112 bytes in for PE32+. TLS table is data directory index 9.
+    let dd_base = opt_off + if is64 { 112 } else { 96 };
+    let tls_dir_off = dd_base + 9 * 8;
+    if tls_dir_off + 8 > data.len() {
+        return callbacks;
+    }
+    let tls_rva = r32le(data, tls_dir_off);
+    if tls_rva == 0 {
+        return callbacks;
+    }
+    let tls_off = match rva_to_offset(tls_rva as u64, sections) {
+        Some(o) => o,
+        None => return callbacks,
+    };
+
+    // AddressOfCallBacks: offset 24 in IMAGE_TLS_DIRECTORY64, offset 12 in
+    // IMAGE_TLS_DIRECTORY32
+    let (cb_va, ptr_size) = if is64 {
+        (r64le(data, tls_off + 24), 8usize)
+    } else {
+        (r32le(data, tls_off + 12) as u64, 4usize)
+    };
+    if cb_va == 0 {
+        return callbacks;
+    }
+    let cb_rva = cb_va.saturating_sub(image_base);
+    let mut off = match rva_to_offset(cb_rva, sections) {
+        Some(o) => o,
+        None => return callbacks,
+    };
+
+    // Walk the null-terminated array of callback VAs (cap at 64 to bound
+    // execution on a corrupt/adversarial binary)
+    for _ in 0..64 {
+        if off + ptr_size > data.len() {
+            break;
+        }
+        let cb = if ptr_size == 8 { r64le(data, off) } else { r32le(data, off) as u64 };
+        if cb == 0 {
+            break;
+        }
+        callbacks.push(cb);
+        off += ptr_size;
+    }
+    callbacks
+}
+
 /// Analyse a binary, returning the parsed info *and* the raw bytes so callers
 /// can pass them on to packing_hints / hashes without re-reading the file.
 pub fn analyze(path: &str, no_size_limit: bool) -> Result<(BinaryInfo, Vec<u8>)> {
@@ -248,26 +316,29 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         })
         .collect();
 
-    // NOTE: This detects the .tls *section* which is a reliable indicator, but
-    // does not enumerate actual TLS callback VAs from the data directory.
-    // Full callback enumeration (walking IMAGE_TLS_DIRECTORY) is added in a
-    // follow-up commit.
+    // Enumerate actual TLS callback VAs from the data directory. Falling
+    // back to noting the .tls section by name if the directory walk finds
+    // nothing (e.g. a .tls section exists but has an empty callback array).
     let lfanew = pe.header.dos_header.pe_pointer;
-    let tls_callbacks: Vec<String> = pe
-        .sections
-        .iter()
-        .filter(|s| {
-            String::from_utf8_lossy(&s.name)
-                .trim_matches('\0')
-                .eq_ignore_ascii_case(".tls")
-        })
-        .map(|s| {
-            format!(
-                ".tls section at VA 0x{:x}, raw size {}",
-                s.virtual_address, s.size_of_raw_data
-            )
-        })
-        .collect();
+    let callback_vas = parse_tls_callbacks(data, lfanew, pe.image_base as u64, &pe.sections);
+    let tls_callbacks: Vec<String> = if !callback_vas.is_empty() {
+        callback_vas.iter().map(|va| format!("TLS callback at VA 0x{:x}", va)).collect()
+    } else {
+        pe.sections
+            .iter()
+            .filter(|s| {
+                String::from_utf8_lossy(&s.name)
+                    .trim_matches('\0')
+                    .eq_ignore_ascii_case(".tls")
+            })
+            .map(|s| {
+                format!(
+                    ".tls section at VA 0x{:x}, raw size {} (no callbacks enumerated)",
+                    s.virtual_address, s.size_of_raw_data
+                )
+            })
+            .collect()
+    };
 
     let rich_header = parse_rich_header(data, lfanew);
     if let Some(rh) = &rich_header {
