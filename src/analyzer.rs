@@ -21,6 +21,8 @@ pub struct BinaryInfo {
     pub strings: Vec<String>,
     pub entropy: f64,
     pub sections: Vec<SectionInfo>,
+    /// PE-only: parsed Rich header (compiler/linker fingerprint), if present
+    pub rich_header: Option<RichHeaderInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -60,6 +62,43 @@ pub struct CategorizedStrings {
     pub other: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RichHeaderEntry {
+    /// Raw CompID dword (productId << 16 | buildNumber)
+    pub comp_id: u32,
+    pub product_id: u16,
+    pub build_number: u16,
+    pub count: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RichHeaderInfo {
+    pub entries: Vec<RichHeaderEntry>,
+    /// MD5 of the decoded entry table — a compiler/linker toolchain
+    /// fingerprint. Two binaries built with the same toolchain and the
+    /// same set of object files tend to share this hash.
+    pub hash: String,
+}
+
+// ── little-endian byte readers ─────────────────────────────────────────────
+
+fn r16le(data: &[u8], off: usize) -> u16 {
+    if off + 2 > data.len() { return 0; }
+    u16::from_le_bytes([data[off], data[off + 1]])
+}
+
+fn r32le(data: &[u8], off: usize) -> u32 {
+    if off + 4 > data.len() { return 0; }
+    u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
+}
+
+fn r64le(data: &[u8], off: usize) -> u64 {
+    if off + 8 > data.len() { return 0; }
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&data[off..off + 8]);
+    u64::from_le_bytes(b)
+}
+
 /// Read and validate a binary file.
 /// Set `no_size_limit = true` to bypass the 256 MB cap (e.g. for large firmware blobs).
 pub fn read_file(path: &str, no_size_limit: bool) -> Result<Vec<u8>> {
@@ -73,6 +112,86 @@ pub fn read_file(path: &str, no_size_limit: bool) -> Result<Vec<u8>> {
         );
     }
     fs::read(path).with_context(|| format!("failed to read '{}'", path))
+}
+
+/// Convert an RVA to a file offset using the PE section table.
+fn rva_to_offset(rva: u64, sections: &[goblin::pe::section_table::SectionTable]) -> Option<usize> {
+    for s in sections {
+        let va = s.virtual_address as u64;
+        let size = (s.virtual_size as u64).max(s.size_of_raw_data as u64);
+        if rva >= va && rva < va + size {
+            return Some((s.pointer_to_raw_data as u64 + (rva - va)) as usize);
+        }
+    }
+    None
+}
+
+/// Parse the (undocumented) PE "Rich" header — an XOR-obfuscated table of
+/// linker/compiler tool identifiers that MSVC embeds between the DOS stub
+/// and the PE header. Useful as a build-toolchain fingerprint: two binaries
+/// compiled from the same project with the same toolchain tend to produce
+/// the same hash, while a packed/repacked binary often has none at all.
+///
+/// Returns `None` if no "Rich" marker is found (common for non-MSVC
+/// toolchains, hand-crafted PEs, or binaries where the DOS stub was
+/// stripped/overwritten by a packer).
+pub fn parse_rich_header(data: &[u8], lfanew: u32) -> Option<RichHeaderInfo> {
+    let lfanew = lfanew as usize;
+    if lfanew < 0x80 || lfanew > data.len() {
+        return None;
+    }
+
+    // Search for the "Rich" marker in the DOS-stub region [0x80, lfanew)
+    let region = &data[0x80..lfanew];
+    let rich_rel = region.windows(4).position(|w| w == b"Rich")?;
+    let rich_abs = 0x80 + rich_rel;
+    if rich_abs + 8 > data.len() {
+        return None;
+    }
+    // The 4 bytes immediately after "Rich" are the XOR key
+    let key = r32le(data, rich_abs + 4);
+
+    // Walk backwards in 4-byte steps looking for the XOR-encoded "DanS"
+    // marker (0x536E6144), which marks the start of the table
+    let mut dans_pos = None;
+    let mut p = rich_abs;
+    while p >= 0x80 + 4 {
+        p -= 4;
+        if r32le(data, p) ^ key == 0x536E_6144 {
+            dans_pos = Some(p);
+            break;
+        }
+    }
+    let dans_pos = dans_pos?;
+
+    // DanS is followed by 3 zero-padding dwords, then pairs of
+    // (CompID dword, Count dword) up to the "Rich" marker
+    let entries_start = dans_pos + 16;
+    if entries_start > rich_abs {
+        return None;
+    }
+
+    let mut entries = Vec::new();
+    let mut raw = Vec::new();
+    let mut p = entries_start;
+    while p + 8 <= rich_abs {
+        let comp = r32le(data, p) ^ key;
+        let count = r32le(data, p + 4) ^ key;
+        entries.push(RichHeaderEntry {
+            comp_id: comp,
+            product_id: (comp >> 16) as u16,
+            build_number: (comp & 0xFFFF) as u16,
+            count,
+        });
+        raw.extend_from_slice(&comp.to_le_bytes());
+        raw.extend_from_slice(&count.to_le_bytes());
+        p += 8;
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    let hash = format!("{:x}", md5::compute(&raw));
+    Some(RichHeaderInfo { entries, hash })
 }
 
 /// Analyse a binary, returning the parsed info *and* the raw bytes so callers
@@ -131,8 +250,9 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
 
     // NOTE: This detects the .tls *section* which is a reliable indicator, but
     // does not enumerate actual TLS callback VAs from the data directory.
-    // Full callback enumeration (walking IMAGE_TLS_DIRECTORY) is tracked as a
-    // future improvement.
+    // Full callback enumeration (walking IMAGE_TLS_DIRECTORY) is added in a
+    // follow-up commit.
+    let lfanew = pe.header.dos_header.pe_pointer;
     let tls_callbacks: Vec<String> = pe
         .sections
         .iter()
@@ -148,6 +268,11 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
             )
         })
         .collect();
+
+    let rich_header = parse_rich_header(data, lfanew);
+    if let Some(rh) = &rich_header {
+        headers.push(("Rich Header Hash".into(), rh.hash.clone()));
+    }
 
     let sections: Vec<SectionInfo> = pe
         .sections
@@ -178,6 +303,7 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         strings: extract_strings(data, 4),
         entropy,
         sections,
+        rich_header,
     })
 }
 
@@ -291,6 +417,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         strings: extract_strings(data, 4),
         entropy,
         sections,
+        rich_header: None,
     })
 }
 
