@@ -102,13 +102,13 @@ static ANTICHEAT_STRINGS: &[(&str, &str)] = &[
     ("\\\\GLOBALROOT",              "Device path (driver comms)"),
 ];
 
-/// checks if the sig is in the strings, returns a nice 80-char window around it
+/// Match sig against individual strings — returns a short window around the match.
 fn match_strings(strings: &[String], sig: &str) -> Option<String> {
     let sig_lo = sig.to_lowercase();
     for s in strings {
         let s_lo = s.to_lowercase();
         if let Some(pos) = s_lo.find(&sig_lo) {
-            // grab 80 chars centered on the match
+            // Return a 80-char window centered on the match
             let start = pos.saturating_sub(20);
             let end = (pos + sig.len() + 40).min(s.len());
             let window = &s[start..end];
@@ -150,4 +150,100 @@ pub fn scan_anticheat(imports: &[(String, String)], strings: &[String]) -> Vec<S
         }
     }
     hits
+}
+
+// ── user-config-aware variants ────────────────────────────────────────────
+//
+// These wrap the built-in scanners above and additionally check entries
+// loaded from ~/.sigil.toml (see config.rs). Kept separate from
+// scan_antidebug/scan_anticheat so existing callers and tests that only
+// care about the built-in tables are unaffected.
+
+use crate::config::SigEntry;
+
+pub fn scan_antidebug_with_config(
+    imports: &[(String, String)],
+    strings: &[String],
+    extra_imports: &[SigEntry],
+    extra_strings: &[SigEntry],
+) -> Vec<SigHit> {
+    let mut hits = scan_antidebug(imports, strings);
+    for (lib, func) in imports {
+        for sig in extra_imports {
+            if func.eq_ignore_ascii_case(&sig.pattern) {
+                hits.push(SigHit {
+                    category: "anti-debug".into(),
+                    technique: format!("{} (custom)", sig.description),
+                    matched: format!("{}!{}", lib, func),
+                });
+            }
+        }
+    }
+    for sig in extra_strings {
+        if let Some(m) = match_strings(strings, &sig.pattern) {
+            hits.push(SigHit {
+                category: "anti-debug".into(),
+                technique: format!("{} (custom)", sig.description),
+                matched: m,
+            });
+        }
+    }
+    hits
+}
+
+pub fn scan_anticheat_with_config(
+    imports: &[(String, String)],
+    strings: &[String],
+    extra_imports: &[SigEntry],
+    extra_strings: &[SigEntry],
+) -> Vec<SigHit> {
+    let mut hits = scan_anticheat(imports, strings);
+    for (lib, func) in imports {
+        for sig in extra_imports {
+            if func.eq_ignore_ascii_case(&sig.pattern) {
+                hits.push(SigHit {
+                    category: "anti-cheat".into(),
+                    technique: format!("{} (custom)", sig.description),
+                    matched: format!("{}!{}", lib, func),
+                });
+            }
+        }
+    }
+    for sig in extra_strings {
+        if let Some(m) = match_strings(strings, &sig.pattern) {
+            hits.push(SigHit {
+                category: "anti-cheat".into(),
+                technique: format!("{} (custom)", sig.description),
+                matched: m,
+            });
+        }
+    }
+    hits
+}
+
+// ── imphash clustering ───────────────────────────────────────────────────
+
+/// Small starter set of known imphashes for common packers/loaders, useful
+/// as a quick triage signal. This list is intentionally minimal — extend it
+/// via `~/.sigil.toml` (`[[known_imphashes]]`) with hashes relevant to your
+/// own threat intel rather than relying on this list alone.
+static KNOWN_IMPHASHES: &[(&str, &str)] = &[
+    ("1f2d5f2b1d3b6e9a4c7d8e9f0a1b2c3d", "Example: generic UPX-packed stub (illustrative placeholder)"),
+];
+
+/// Check a computed imphash against the built-in table and any
+/// user-supplied entries from ~/.sigil.toml. Returns the description of
+/// the first match, if any.
+pub fn check_imphash<'a>(hash: &str, extra: &'a [SigEntry]) -> Option<String> {
+    for &(h, desc) in KNOWN_IMPHASHES {
+        if h.eq_ignore_ascii_case(hash) {
+            return Some(desc.to_string());
+        }
+    }
+    for sig in extra {
+        if sig.pattern.eq_ignore_ascii_case(hash) {
+            return Some(format!("{} (custom)", sig.description));
+        }
+    }
+    None
 }
