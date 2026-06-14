@@ -10,7 +10,7 @@ use analyzer::{
     analyze, categorize_strings, code_section_from_bytes, extract_strings,
     import_tuples, packing_hints_from_bytes, packing_verdict, pattern_search,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 
@@ -76,6 +76,13 @@ enum Commands {
         path: String,
         #[arg(long)] html: bool,
         #[arg(short, long)] output: Option<String>,
+    },
+    /// Scan all files in a directory and summarise anti-debug/anti-cheat hits
+    Batch {
+        dir: String,
+        /// Recurse into subdirectories
+        #[arg(short, long)] recursive: bool,
+        #[arg(long)] json: bool,
     },
 }
 
@@ -542,8 +549,118 @@ fn run(
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             }
         }
+
+        Commands::Batch { dir, recursive, json } => {
+            let files = collect_files(&dir, recursive)?;
+            let total = files.len();
+            let mut results = Vec::new();
+
+            for (i, f) in files.iter().enumerate() {
+                if !quiet && !json {
+                    // Simple in-place progress indicator
+                    eprint!("\r{} [{}/{}] {}", "scanning".dimmed(), i + 1, total, f);
+                    use std::io::Write;
+                    let _ = std::io::stderr().flush();
+                }
+
+                match analyze(f, nsl) {
+                    Ok((info, data)) => {
+                        let tuples = import_tuples(&info);
+                        let ad = sigs::scan_antidebug_with_config(
+                            &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings);
+                        let ac = sigs::scan_anticheat_with_config(
+                            &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings);
+                        let h = hashes::from_bytes(&data);
+                        let verdict = packing_verdict(info.entropy);
+                        results.push(serde_json::json!({
+                            "path": f,
+                            "format": info.format,
+                            "arch": info.arch,
+                            "entropy": info.entropy,
+                            "verdict": verdict,
+                            "antidebug_hits": ad.len(),
+                            "anticheat_hits": ac.len(),
+                            "md5": h.md5,
+                            "sha256": h.sha256,
+                        }));
+                    }
+                    Err(e) => {
+                        results.push(serde_json::json!({
+                            "path": f,
+                            "error": e.to_string(),
+                        }));
+                    }
+                }
+            }
+            if !quiet && !json {
+                eprintln!("\r{}", " ".repeat(80)); // clear progress line
+            }
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&results)?);
+            } else {
+                if !quiet {
+                    println!("\n{} batch scan — {} files\n", "◈ sigil".bold().magenta(), total);
+                    println!("{}", "─".repeat(90).dimmed());
+                }
+                println!("{:<40} {:<6} {:<22} {:>3} {:>3}",
+                    "Path".dimmed(), "Fmt".dimmed(), "Verdict".dimmed(), "AD".dimmed(), "AC".dimmed());
+                for r in &results {
+                    if let Some(err) = r.get("error").and_then(|v| v.as_str()) {
+                        println!("{:<40} {}", truncate_path(r["path"].as_str().unwrap_or(""), 40), format!("ERROR: {}", err).red());
+                        continue;
+                    }
+                    let path = r["path"].as_str().unwrap_or("");
+                    let fmt = r["format"].as_str().unwrap_or("");
+                    let verdict = r["verdict"].as_str().unwrap_or("");
+                    let ad = r["antidebug_hits"].as_u64().unwrap_or(0);
+                    let ac = r["anticheat_hits"].as_u64().unwrap_or(0);
+                    let vc = match verdict {
+                        "LIKELY PACKED/ENCRYPTED" => verdict.red(),
+                        "SUSPICIOUS"              => verdict.yellow(),
+                        _                         => verdict.green(),
+                    };
+                    let ad_s = if ad > 0 { ad.to_string().red() } else { ad.to_string().dimmed() };
+                    let ac_s = if ac > 0 { ac.to_string().magenta() } else { ac.to_string().dimmed() };
+                    println!("{:<40} {:<6} {:<22} {:>3} {:>3}",
+                        truncate_path(path, 40), fmt, vc, ad_s, ac_s);
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// Recursively (or not) collect candidate binary file paths under `dir`.
+fn collect_files(dir: &str, recursive: bool) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let entries = std::fs::read_dir(dir)
+        .with_context(|| format!("cannot read directory '{}'", dir))?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            if recursive {
+                if let Some(p) = path.to_str() {
+                    out.extend(collect_files(p, recursive)?);
+                }
+            }
+            continue;
+        }
+        if let Some(p) = path.to_str() {
+            out.push(p.to_string());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+fn truncate_path(p: &str, max: usize) -> String {
+    if p.len() <= max {
+        p.to_string()
+    } else {
+        format!("...{}", &p[p.len() - (max - 3)..])
+    }
 }
 
 // ── display helpers ───────────────────────────────────────────────────────────
