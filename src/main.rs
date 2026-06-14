@@ -1,7 +1,9 @@
 mod analyzer;
+mod config;
 mod disasm;
 mod hashes;
 mod report;
+mod rules;
 mod sigs;
 
 use analyzer::{
@@ -21,6 +23,9 @@ struct Cli {
     /// Bypass the 256 MB file size cap
     #[arg(long, global = true)]
     no_size_limit: bool,
+    /// Path to a custom rules TOML file (see `sigil --help` for format)
+    #[arg(long, global = true)]
+    rules: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -79,26 +84,56 @@ fn main() {
     let quiet = cli.quiet;
     let nsl   = cli.no_size_limit;
 
-    if let Err(e) = run(cli.command, quiet, nsl) {
+    let user_cfg = config::load_user_config();
+    let custom_rules = match &cli.rules {
+        Some(path) => match rules::load_rules(path) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                eprintln!("{} {:#}", "error:".red().bold(), e);
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
+
+    if let Err(e) = run(cli.command, quiet, nsl, &user_cfg, custom_rules.as_ref()) {
         // All errors go to stderr; never pollute stdout (breaks --json pipelines)
         eprintln!("{} {:#}", "error:".red().bold(), e);
         std::process::exit(1);
     }
 }
 
-fn run(command: Commands, quiet: bool, nsl: bool) -> Result<()> {
+fn run(
+    command: Commands,
+    quiet: bool,
+    nsl: bool,
+    user_cfg: &config::SigilConfig,
+    custom_rules: Option<&rules::RuleFile>,
+) -> Result<()> {
     match command {
         Commands::Scan { path, json } => {
             let (info, data) = analyze(&path, nsl)?;
             let tuples = import_tuples(&info);
-            let ad     = sigs::scan_antidebug(&tuples, &info.strings);
-            let ac     = sigs::scan_anticheat(&tuples, &info.strings);
+            let ad     = sigs::scan_antidebug_with_config(
+                &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings);
+            let ac     = sigs::scan_anticheat_with_config(
+                &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings);
             let hints  = packing_hints_from_bytes(&data).unwrap_or_default();
+            let custom_hits = custom_rules
+                .map(|r| rules::scan_rules(r, &data, &info.strings))
+                .unwrap_or_default();
+            let h = hashes::from_bytes(&data);
+            let imphash_match = h.imphash.as_deref()
+                .and_then(|hash| sigs::check_imphash(hash, &user_cfg.known_imphashes));
+
             if json {
                 let mut obj = serde_json::to_value(&info)?;
                 obj["antidebug"]     = serde_json::to_value(&ad)?;
                 obj["anticheat"]     = serde_json::to_value(&ac)?;
                 obj["packing_hints"] = serde_json::to_value(&hints)?;
+                obj["custom_rule_hits"] = serde_json::to_value(&custom_hits)?;
+                obj["hashes"]        = serde_json::to_value(&h)?;
+                obj["imphash_match"] = serde_json::to_value(&imphash_match)?;
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             } else {
                 if !quiet { print_banner(&info.path, &info.format, &info.arch); }
@@ -113,12 +148,23 @@ fn run(command: Commands, quiet: bool, nsl: bool) -> Result<()> {
                     println!("\n{}", "TLS Callbacks:".bold().red());
                     for t in &info.tls_callbacks { println!("  {} {}", "⚑".red(), t); }
                 }
+                if let Some(desc) = &imphash_match {
+                    println!("\n{}", "Imphash Match:".bold().red());
+                    println!("  {} {}", "⚑".red(), desc);
+                }
                 if !ad.is_empty() || !ac.is_empty() {
                     println!("\n{}", "Detections:".bold().cyan());
                     println!("{}", "─".repeat(60).dimmed());
                     for h in ad.iter().chain(ac.iter()) {
                         let tag = if h.category == "anti-debug" { "[AD]".red() } else { "[AC]".magenta() };
                         println!("  {} {} — {}", tag, h.technique.bold(), h.matched.dimmed());
+                    }
+                }
+                if !custom_hits.is_empty() {
+                    println!("\n{}", "Custom Rule Hits:".bold().cyan());
+                    println!("{}", "─".repeat(60).dimmed());
+                    for h in &custom_hits {
+                        println!("  {} {} [{}] — {}", "⚑".blue(), h.technique.bold(), h.category.dimmed(), h.matched.dimmed());
                     }
                 }
             }
@@ -243,8 +289,12 @@ fn run(command: Commands, quiet: bool, nsl: bool) -> Result<()> {
 
         Commands::Hashes { path, json } => {
             let h = hashes::compute(&path, nsl)?;
+            let imphash_match = h.imphash.as_deref()
+                .and_then(|hash| sigs::check_imphash(hash, &user_cfg.known_imphashes));
             if json {
-                println!("{}", serde_json::to_string_pretty(&h)?);
+                let mut obj = serde_json::to_value(&h)?;
+                obj["imphash_match"] = serde_json::to_value(&imphash_match)?;
+                println!("{}", serde_json::to_string_pretty(&obj)?);
             } else {
                 if !quiet {
                     println!("\n{}", "Hashes:".bold().cyan());
@@ -256,6 +306,9 @@ fn run(command: Commands, quiet: bool, nsl: bool) -> Result<()> {
                     println!("  {:<10} {}", "imphash".dimmed(), imp.yellow());
                 } else {
                     println!("  {:<10} {}", "imphash".dimmed(), "N/A".dimmed());
+                }
+                if let Some(desc) = &imphash_match {
+                    println!("  {:<10} {} {}", "match".dimmed(), "⚑".red(), desc.red());
                 }
             }
         }
@@ -301,7 +354,9 @@ fn run(command: Commands, quiet: bool, nsl: bool) -> Result<()> {
 
         Commands::Antidebug { path, json } => {
             let (info, _) = analyze(&path, nsl)?;
-            let hits = sigs::scan_antidebug(&import_tuples(&info), &info.strings);
+            let hits = sigs::scan_antidebug_with_config(
+                &import_tuples(&info), &info.strings,
+                &user_cfg.antidebug_imports, &user_cfg.antidebug_strings);
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
@@ -321,7 +376,9 @@ fn run(command: Commands, quiet: bool, nsl: bool) -> Result<()> {
 
         Commands::Anticheat { path, json } => {
             let (info, _) = analyze(&path, nsl)?;
-            let hits = sigs::scan_anticheat(&import_tuples(&info), &info.strings);
+            let hits = sigs::scan_anticheat_with_config(
+                &import_tuples(&info), &info.strings,
+                &user_cfg.anticheat_imports, &user_cfg.anticheat_strings);
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
@@ -448,10 +505,17 @@ fn run(command: Commands, quiet: bool, nsl: bool) -> Result<()> {
         Commands::Report { path, html, output } => {
             let (info, data) = analyze(&path, nsl)?;
             let tuples  = import_tuples(&info);
-            let ad_hits = sigs::scan_antidebug(&tuples, &info.strings);
-            let ac_hits = sigs::scan_anticheat(&tuples, &info.strings);
+            let ad_hits = sigs::scan_antidebug_with_config(
+                &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings);
+            let ac_hits = sigs::scan_anticheat_with_config(
+                &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings);
             let hints   = packing_hints_from_bytes(&data).unwrap_or_default();
             let h       = hashes::from_bytes(&data);
+            let custom_hits = custom_rules
+                .map(|r| rules::scan_rules(r, &data, &info.strings))
+                .unwrap_or_default();
+            let imphash_match = h.imphash.as_deref()
+                .and_then(|hash| sigs::check_imphash(hash, &user_cfg.known_imphashes));
 
             if html {
                 let out = output.unwrap_or_else(|| format!("{}.html",
@@ -473,6 +537,8 @@ fn run(command: Commands, quiet: bool, nsl: bool) -> Result<()> {
                 obj["anticheat"]     = serde_json::to_value(&ac_hits)?;
                 obj["packing_hints"] = serde_json::to_value(&hints)?;
                 obj["hashes"]        = serde_json::to_value(&h)?;
+                obj["custom_rule_hits"] = serde_json::to_value(&custom_hits)?;
+                obj["imphash_match"] = serde_json::to_value(&imphash_match)?;
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             }
         }
