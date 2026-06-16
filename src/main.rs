@@ -15,7 +15,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 
 #[derive(Parser)]
-#[command(name = "sigil", about = "Static PE/ELF binary analyzer", version = "0.2.0")]
+#[command(name = "sigil", about = "Static PE/ELF binary analyzer", version = "0.3.0")]
 struct Cli {
     /// Suppress banner and decorative output (safe for piping / scripting)
     #[arg(long, global = true)]
