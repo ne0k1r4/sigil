@@ -224,12 +224,23 @@ pub fn scan_anticheat_with_config(
 
 // ── imphash clustering ───────────────────────────────────────────────────
 
-/// Small starter set of known imphashes for common packers/loaders, useful
-/// as a quick triage signal. This list is intentionally minimal — extend it
-/// via `~/.sigil.toml` (`[[known_imphashes]]`) with hashes relevant to your
-/// own threat intel rather than relying on this list alone.
+/// Small starter set of imphashes that have been widely reported in public
+/// threat-intel writeups. This is NOT a substitute for a real, current
+/// database — imphashes are toolchain-dependent and a single value can
+/// correspond to many different (and many *benign*) binaries built with
+/// the same compiler/linker/import set. Treat a hit here as "worth a closer
+/// look", not as a verdict.
+///
+/// For real coverage, load a MalwareBazaar-format imphash export via
+/// `--imphash-db <path>` (see `load_imphash_db` below) — get one from
+/// https://bazaar.abuse.ch/export/ — or add your own entries to
+/// `~/.sigil.toml` under `[[known_imphashes]]`.
 static KNOWN_IMPHASHES: &[(&str, &str)] = &[
-    ("1f2d5f2b1d3b6e9a4c7d8e9f0a1b2c3d", "Example: generic UPX-packed stub (illustrative placeholder)"),
+    // Frequently cited in public reporting (2020-2023) as a default/common
+    // Cobalt Strike beacon imphash. Cobalt Strike imphashes vary by version
+    // and build options, so absence of a match means nothing — but a hit
+    // is a strong signal worth investigating.
+    ("a909b3c8d3d1ce4ae0a4f607a37a8129", "Commonly-reported Cobalt Strike beacon imphash — verify against current samples"),
 ];
 
 /// A single imphash → description record, typically loaded from an
