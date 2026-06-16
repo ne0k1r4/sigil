@@ -84,6 +84,13 @@ enum Commands {
         #[arg(short, long)] recursive: bool,
         #[arg(long)] json: bool,
     },
+    /// Show or extract trailing data appended after the last PE section
+    Overlay {
+        path: String,
+        /// Write the overlay bytes to this file
+        #[arg(short, long)] output: Option<String>,
+        #[arg(long)] json: bool,
+    },
 }
 
 fn main() {
@@ -155,6 +162,7 @@ fn run(
                     println!("\n{}", "TLS Callbacks:".bold().red());
                     for t in &info.tls_callbacks { println!("  {} {}", "⚑".red(), t); }
                 }
+
                 if let Some(desc) = &imphash_match {
                     println!("\n{}", "Imphash Match:".bold().red());
                     println!("  {} {}", "⚑".red(), desc);
@@ -181,7 +189,12 @@ fn run(
             let (info, _) = analyze(&path, nsl)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(
-                    &serde_json::json!({ "headers": info.headers, "sections": info.sections })
+                    &serde_json::json!({
+                        "headers": info.headers,
+                        "sections": info.sections,
+                        "rich_header": info.rich_header,
+                        "overlay": info.overlay,
+                    })
                 )?);
             } else {
                 if !quiet { print_banner(&info.path, &info.format, &info.arch); }
@@ -624,6 +637,48 @@ fn run(
                     let ac_s = if ac > 0 { ac.to_string().magenta() } else { ac.to_string().dimmed() };
                     println!("{:<40} {:<6} {:<22} {:>3} {:>3}",
                         truncate_path(path, 40), fmt, vc, ad_s, ac_s);
+                }
+            }
+        }
+
+        Commands::Overlay { path, output, json } => {
+            let (info, data) = analyze(&path, nsl)?;
+            match &info.overlay {
+                None => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "overlay": null }))?);
+                    } else if !quiet {
+                        println!("{}", "No overlay data — file ends at the last section.".green());
+                    }
+                }
+                Some(ov) => {
+                    if let Some(out_path) = &output {
+                        if std::path::Path::new(out_path).exists() {
+                            anyhow::bail!(
+                                "output file '{}' already exists — pass a different -o <path>",
+                                out_path
+                            );
+                        }
+                        let bytes = &data[ov.offset as usize..];
+                        std::fs::write(out_path, bytes)
+                            .with_context(|| format!("failed to write '{}'", out_path))?;
+                        if !quiet {
+                            println!("{} wrote {} bytes of overlay to {}", ">>".green(), bytes.len(), out_path.yellow());
+                        }
+                    }
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "overlay": ov }))?);
+                    } else if !quiet || output.is_none() {
+                        println!("\n{}", "Overlay:".bold().cyan());
+                        println!("{}", "─".repeat(50).dimmed());
+                        println!("  offset   0x{:x}", ov.offset);
+                        println!("  size     {} bytes", ov.size);
+                        println!("  sha256   {}", ov.sha256.yellow());
+                        println!("  entropy  {:.3}", ov.entropy);
+                        if output.is_none() {
+                            println!("\n  {} pass -o <file> to extract these bytes", "tip:".dimmed());
+                        }
+                    }
                 }
             }
         }
