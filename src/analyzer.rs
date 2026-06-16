@@ -26,6 +26,8 @@ pub struct BinaryInfo {
     pub rich_header: Option<RichHeaderInfo>,
     /// PE-only: trailing data appended after the last section, if any
     pub overlay: Option<OverlayInfo>,
+    /// PE-only: Authenticode certificate table info, if present
+    pub authenticode: Option<AuthenticodeInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -90,6 +92,25 @@ pub struct OverlayInfo {
     pub size: u64,
     pub sha256: String,
     pub entropy: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AuthenticodeInfo {
+    /// wCertificateType from WIN_CERTIFICATE (0x0002 = PKCS#7 SignedData)
+    pub cert_type: u16,
+    /// wRevision from WIN_CERTIFICATE (0x0200 = WIN_CERT_REVISION_2_0)
+    pub cert_revision: u16,
+    /// Size in bytes of the certificate table entry
+    pub size: u32,
+    /// Printable strings extracted from the raw DER-encoded certificate
+    /// blob — typically includes Subject/Issuer Common Names and
+    /// Organization fields from the X.509 certificate(s).
+    ///
+    /// NOTE: this is a heuristic string scan, *not* signature
+    /// verification. A binary having an Authenticode certificate table
+    /// does not mean the signature is valid, unexpired, or trusted —
+    /// only that one is present.
+    pub candidate_identities: Vec<String>,
 }
 
 
@@ -273,6 +294,27 @@ pub fn parse_tls_callbacks(data: &[u8], lfanew: u32, image_base: u64, sections: 
     callbacks
 }
 
+/// Read a PE data directory entry (RVA/offset + size) by index.
+/// Index 2 = resource table, 4 = certificate table, 9 = TLS table, etc.
+///
+/// NOTE: for the certificate table (index 4) the first field is a *file
+/// offset*, not an RVA — this is the one exception in the PE spec. Callers
+/// must handle that distinction; this function just returns the raw value.
+pub fn pe_data_directory(data: &[u8], lfanew: u32, index: usize) -> (u32, u32) {
+    let lfanew = lfanew as usize;
+    let opt_off = lfanew + 4 + 20;
+    if opt_off + 2 > data.len() {
+        return (0, 0);
+    }
+    let magic = r16le(data, opt_off);
+    let is64 = magic == 0x20B;
+    let dd_base = opt_off + if is64 { 112 } else { 96 };
+    let dir_off = dd_base + index * 8;
+    if dir_off + 8 > data.len() {
+        return (0, 0);
+    }
+    (r32le(data, dir_off), r32le(data, dir_off + 4))
+}
 
 /// Compute info about any data appended after the last section ("overlay").
 /// Common for self-extracting archives, installers, and signed binaries
@@ -294,6 +336,47 @@ pub fn compute_overlay_info(data: &[u8], sections: &[goblin::pe::section_table::
     } else {
         None
     }
+}
+
+/// Parse the Authenticode certificate table (data directory index 4), if
+/// present. Extracts the WIN_CERTIFICATE header fields and runs a printable
+/// string scan over the embedded DER-encoded certificate blob to surface
+/// likely Subject/Issuer identity strings.
+///
+/// This is a fast triage signal only — it does NOT verify the signature.
+pub fn parse_authenticode(data: &[u8], lfanew: u32) -> Option<AuthenticodeInfo> {
+    // Certificate table: field 1 is a file OFFSET (not RVA, per spec)
+    let (cert_off, cert_size) = pe_data_directory(data, lfanew, 4);
+    if cert_off == 0 || cert_size == 0 {
+        return None;
+    }
+    let off = cert_off as usize;
+    if off + 8 > data.len() {
+        return None;
+    }
+    let dw_length = r32le(data, off) as usize;
+    let cert_revision = r16le(data, off + 4);
+    let cert_type = r16le(data, off + 6);
+
+    let blob_start = (off + 8).min(data.len());
+    let blob_end = (off.saturating_add(dw_length)).min(data.len()).max(blob_start);
+    let blob = &data[blob_start..blob_end];
+
+    // DER-encoded X.509 fields (CN=, O=, etc.) appear as printable ASCII
+    // runs inside the otherwise-binary PKCS#7 structure. Filter to
+    // plausible identity-like strings (contains a letter, reasonable length).
+    let candidate_identities: Vec<String> = extract_strings(blob, 4)
+        .into_iter()
+        .filter(|s| s.len() >= 4 && s.len() <= 80 && s.chars().any(|c| c.is_alphabetic()))
+        .take(25)
+        .collect();
+
+    Some(AuthenticodeInfo {
+        cert_type,
+        cert_revision,
+        size: cert_size,
+        candidate_identities,
+    })
 }
 
 
@@ -388,6 +471,9 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         ));
     }
 
+    let authenticode = parse_authenticode(data, lfanew);
+    headers.push(("Digitally Signed".into(), authenticode.is_some().to_string()));
+
 
 
     let sections: Vec<SectionInfo> = pe
@@ -421,6 +507,7 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         sections,
         rich_header,
         overlay,
+        authenticode,
     })
 }
 
@@ -536,6 +623,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         sections,
         rich_header: None,
         overlay: None,
+        authenticode: None,
     })
 }
 
