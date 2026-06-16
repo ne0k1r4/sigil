@@ -108,6 +108,26 @@ pub fn generate_html(
         None => "<h2>Authenticode</h2>\n<p class=\"dim\">Not digitally signed (no certificate table).</p>".to_string(),
     };
 
+    let version_section: String = match &info.version_info {
+        Some(vi) => {
+            let row = |label: &str, val: &Option<String>| -> String {
+                format!("<tr><th>{}</th><td>{}</td></tr>", label, val.as_deref().map(e).unwrap_or_else(|| "(none)".to_string()))
+            };
+            format!(
+                "<h2>Version Info</h2>\n<table>\n{}{}{}{}{}{}{}{}</table>",
+                row("CompanyName", &vi.company_name),
+                row("FileDescription", &vi.file_description),
+                row("FileVersion", &vi.file_version),
+                row("InternalName", &vi.internal_name),
+                row("LegalCopyright", &vi.legal_copyright),
+                row("OriginalFilename", &vi.original_filename),
+                row("ProductName", &vi.product_name),
+                row("ProductVersion", &vi.product_version),
+            )
+        }
+        None => "<h2>Version Info</h2>\n<p class=\"dim\">No VS_VERSIONINFO resource found.</p>".to_string(),
+    };
+
 
 
     let html = format!(r#"<!DOCTYPE html>
@@ -153,6 +173,7 @@ pub fn generate_html(
 
 {authenticode_section}
 
+{version_section}
 
 
 <h2>Entropy <span class="badge {verdict_class}">{verdict}</span></h2>
@@ -194,6 +215,7 @@ pub fn generate_html(
         rich_section = rich_section,
         overlay_section = overlay_section,
         authenticode_section = authenticode_section,
+        version_section = version_section,
 verdict = verdict,
         verdict_class = verdict_class,
         entropy = info.entropy,
