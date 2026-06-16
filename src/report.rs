@@ -77,6 +77,22 @@ pub fn generate_html(
         None => String::new(),
     };
 
+    let overlay_section: String = match &info.overlay {
+        Some(ov) => format!(
+            "<h2>Overlay</h2>\n\
+             <table>\n\
+             <tr><th>Offset</th><td>0x{:x}</td></tr>\n\
+             <tr><th>Size</th><td>{} bytes</td></tr>\n\
+             <tr><th>SHA-256</th><td class=\"hash\">{}</td></tr>\n\
+             <tr><th>Entropy</th><td>{:.3}</td></tr>\n\
+             </table>",
+            ov.offset, ov.size, e(&ov.sha256), ov.entropy
+        ),
+        None => "<h2>Overlay</h2>\n<p class=\"dim\">None — file ends at the last section.</p>".to_string(),
+    };
+
+
+
     let html = format!(r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -116,6 +132,11 @@ pub fn generate_html(
 
 {rich_section}
 
+{overlay_section}
+
+
+
+
 <h2>Entropy <span class="badge {verdict_class}">{verdict}</span></h2>
 <p>Overall: <strong>{entropy:.4}</strong> / 8.0</p>
 
@@ -153,7 +174,8 @@ pub fn generate_html(
             .map(|(k, v)| format!("<th>{}</th><td>{}</td>", k, v))
             .collect::<Vec<_>>().join("</tr><tr>"),
         rich_section = rich_section,
-        verdict = verdict,
+        overlay_section = overlay_section,
+verdict = verdict,
         verdict_class = verdict_class,
         entropy = info.entropy,
         hints_rows = hints_rows,
