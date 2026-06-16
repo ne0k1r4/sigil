@@ -128,7 +128,14 @@ pub fn generate_html(
         None => "<h2>Version Info</h2>\n<p class=\"dim\">No VS_VERSIONINFO resource found.</p>".to_string(),
     };
 
-
+    let icons_section: String = if info.icon_hashes.is_empty() {
+        "<h2>Icon Resources</h2>\n<p class=\"dim\">No RT_ICON resources found.</p>".to_string()
+    } else {
+        let items: String = info.icon_hashes.iter()
+            .map(|h| format!("<li class=\"hash\">{}</li>", e(h)))
+            .collect();
+        format!("<h2>Icon Resources</h2>\n<p>{} icon resource(s) — SHA-256:</p><ul>{}</ul>", info.icon_hashes.len(), items)
+    };
 
     let html = format!(r#"<!DOCTYPE html>
 <html lang="en">
@@ -175,6 +182,7 @@ pub fn generate_html(
 
 {version_section}
 
+{icons_section}
 
 <h2>Entropy <span class="badge {verdict_class}">{verdict}</span></h2>
 <p>Overall: <strong>{entropy:.4}</strong> / 8.0</p>
@@ -216,7 +224,8 @@ pub fn generate_html(
         overlay_section = overlay_section,
         authenticode_section = authenticode_section,
         version_section = version_section,
-verdict = verdict,
+        icons_section = icons_section,
+        verdict = verdict,
         verdict_class = verdict_class,
         entropy = info.entropy,
         hints_rows = hints_rows,
