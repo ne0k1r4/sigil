@@ -28,6 +28,10 @@ pub struct BinaryInfo {
     pub overlay: Option<OverlayInfo>,
     /// PE-only: Authenticode certificate table info, if present
     pub authenticode: Option<AuthenticodeInfo>,
+    /// PE-only: VS_VERSIONINFO fields (CompanyName, OriginalFilename, etc.)
+    pub version_info: Option<VersionInfo>,
+    /// PE-only: SHA-256 of each RT_ICON resource, for cross-sample comparison
+    pub icon_hashes: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -113,6 +117,35 @@ pub struct AuthenticodeInfo {
     pub candidate_identities: Vec<String>,
 }
 
+/// Standard VS_VERSIONINFO StringFileInfo fields, extracted heuristically
+/// by scanning the RT_VERSION resource for known UTF-16LE key names and
+/// reading the value that follows.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct VersionInfo {
+    pub company_name: Option<String>,
+    pub file_description: Option<String>,
+    pub file_version: Option<String>,
+    pub internal_name: Option<String>,
+    pub legal_copyright: Option<String>,
+    pub original_filename: Option<String>,
+    pub product_name: Option<String>,
+    pub product_version: Option<String>,
+}
+
+impl VersionInfo {
+    fn is_empty(&self) -> bool {
+        self.company_name.is_none()
+            && self.file_description.is_none()
+            && self.file_version.is_none()
+            && self.internal_name.is_none()
+            && self.legal_copyright.is_none()
+            && self.original_filename.is_none()
+            && self.product_name.is_none()
+            && self.product_version.is_none()
+    }
+}
+
+// ── little-endian byte readers ─────────────────────────────────────────────
 
 fn r16le(data: &[u8], off: usize) -> u16 {
     if off + 2 > data.len() { return 0; }
@@ -379,6 +412,184 @@ pub fn parse_authenticode(data: &[u8], lfanew: u32) -> Option<AuthenticodeInfo> 
     })
 }
 
+const VERSION_INFO_KEYS: &[&str] = &[
+    "CompanyName", "FileDescription", "FileVersion", "InternalName",
+    "LegalCopyright", "OriginalFilename", "ProductName", "ProductVersion",
+];
+
+/// Read a null-terminated UTF-16LE string starting at `start`, capped at
+/// 256 code units to bound execution on adversarial input.
+fn read_utf16_string(blob: &[u8], start: usize) -> String {
+    let mut units = Vec::new();
+    let mut i = start;
+    while i + 2 <= blob.len() {
+        let u = u16::from_le_bytes([blob[i], blob[i + 1]]);
+        if u == 0 {
+            break;
+        }
+        units.push(u);
+        i += 2;
+        if units.len() >= 256 {
+            break;
+        }
+    }
+    String::from_utf16_lossy(&units)
+}
+
+/// Heuristically extract VS_VERSIONINFO StringFileInfo fields from an
+/// RT_VERSION resource blob.
+///
+/// Rather than walking the exact (and fiddly, 4-byte-aligned, nested)
+/// VS_VERSIONINFO/StringFileInfo/StringTable/String structure, this scans
+/// the blob for each well-known field name encoded as UTF-16LE, then reads
+/// the UTF-16LE value that immediately follows (after the key's null
+/// terminator and 4-byte alignment padding). This is robust against minor
+/// structural variations and cannot panic on malformed input.
+pub fn parse_version_info(blob: &[u8]) -> VersionInfo {
+    let mut info = VersionInfo::default();
+    let mut i = 0usize;
+    while i + 4 <= blob.len() {
+        for &key in VERSION_INFO_KEYS {
+            let key_bytes: Vec<u8> = key.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+            if blob[i..].starts_with(&key_bytes) {
+                let mut j = i + key_bytes.len() + 2; // skip key + null terminator
+                while j % 4 != 0 && j < blob.len() {
+                    j += 1; // 4-byte alignment padding
+                }
+                let val = read_utf16_string(blob, j);
+                if !val.is_empty() {
+                    match key {
+                        "CompanyName" => info.company_name = Some(val),
+                        "FileDescription" => info.file_description = Some(val),
+                        "FileVersion" => info.file_version = Some(val),
+                        "InternalName" => info.internal_name = Some(val),
+                        "LegalCopyright" => info.legal_copyright = Some(val),
+                        "OriginalFilename" => info.original_filename = Some(val),
+                        "ProductName" => info.product_name = Some(val),
+                        "ProductVersion" => info.product_version = Some(val),
+                        _ => {}
+                    }
+                }
+                i = j;
+                break;
+            }
+        }
+        i += 2; // UTF-16 code unit granularity
+    }
+    info
+}
+
+/// PE resource type IDs we care about
+const RT_ICON: u32 = 3;
+const RT_VERSION: u32 = 16;
+
+/// Walk the PE resource directory tree (Type → Name → Language → data) and
+/// collect (type_id, data_rva, size) for every leaf entry. The tree is
+/// always exactly 3 levels deep, so this never recurses beyond `level == 2`
+/// and cannot loop indefinitely even on a malformed/adversarial tree.
+fn walk_resource_dir(
+    data: &[u8],
+    rsrc_base_off: usize,
+    dir_off: usize,
+    level: usize,
+    type_id: Option<u32>,
+    out: &mut Vec<(u32, usize, u32)>,
+) {
+    if dir_off + 16 > data.len() || out.len() > 4096 {
+        return; // bounds / runaway-tree guard
+    }
+    let num_named = r16le(data, dir_off + 12) as usize;
+    let num_id = r16le(data, dir_off + 14) as usize;
+    let total = (num_named + num_id).min(512); // cap fan-out per directory
+
+    for i in 0..total {
+        let entry_off = dir_off + 16 + i * 8;
+        if entry_off + 8 > data.len() {
+            break;
+        }
+        let name_or_id = r32le(data, entry_off);
+        let offset_to_data = r32le(data, entry_off + 4);
+        let id = name_or_id & 0x7FFF_FFFF;
+        let is_subdir = offset_to_data & 0x8000_0000 != 0;
+        let sub_rel = (offset_to_data & 0x7FFF_FFFF) as usize;
+        let sub_abs = rsrc_base_off + sub_rel;
+
+        match level {
+            0 => {
+                if is_subdir {
+                    walk_resource_dir(data, rsrc_base_off, sub_abs, 1, Some(id), out);
+                }
+            }
+            1 => {
+                if is_subdir {
+                    walk_resource_dir(data, rsrc_base_off, sub_abs, 2, type_id, out);
+                }
+            }
+            _ => {
+                if !is_subdir && sub_abs + 16 <= data.len() {
+                    let data_rva = r32le(data, sub_abs);
+                    let size = r32le(data, sub_abs + 4);
+                    out.push((type_id.unwrap_or(0), data_rva as usize, size));
+                }
+            }
+        }
+    }
+}
+
+/// Parse the PE resource directory (data directory index 2) to extract
+/// VS_VERSIONINFO fields (RT_VERSION) and SHA-256 hashes of each RT_ICON
+/// resource (useful for cross-sample icon comparison — many cheats reuse
+/// a stolen or stock icon across builds).
+///
+/// Returns `(None, vec![])` if there is no resource directory, or it
+/// cannot be parsed.
+pub fn parse_pe_resources(
+    data: &[u8],
+    lfanew: u32,
+    sections: &[goblin::pe::section_table::SectionTable],
+) -> (Option<VersionInfo>, Vec<String>) {
+    let (rsrc_rva, _rsrc_size) = pe_data_directory(data, lfanew, 2);
+    if rsrc_rva == 0 {
+        return (None, vec![]);
+    }
+    let rsrc_off = match rva_to_offset(rsrc_rva as u64, sections) {
+        Some(o) => o,
+        None => return (None, vec![]),
+    };
+
+    let mut leaves = Vec::new();
+    walk_resource_dir(data, rsrc_off, rsrc_off, 0, None, &mut leaves);
+
+    let mut version_info = None;
+    let mut icon_hashes = Vec::new();
+
+    for (type_id, data_rva, size) in leaves {
+        let off = match rva_to_offset(data_rva as u64, sections) {
+            Some(o) => o,
+            None => continue,
+        };
+        let end = (off + size as usize).min(data.len());
+        if off >= end {
+            continue;
+        }
+        let blob = &data[off..end];
+
+        match type_id {
+            RT_VERSION => {
+                let vi = parse_version_info(blob);
+                if !vi.is_empty() && version_info.is_none() {
+                    version_info = Some(vi);
+                }
+            }
+            RT_ICON => {
+                icon_hashes.push(format!("{:x}", Sha256::digest(blob)));
+            }
+            _ => {}
+        }
+    }
+
+    (version_info, icon_hashes)
+}
 
 /// Analyse a binary, returning the parsed info *and* the raw bytes so callers
 /// can pass them on to packing_hints / hashes without re-reading the file.
@@ -474,7 +685,18 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
     let authenticode = parse_authenticode(data, lfanew);
     headers.push(("Digitally Signed".into(), authenticode.is_some().to_string()));
 
-
+    let (version_info, icon_hashes) = parse_pe_resources(data, lfanew, &pe.sections);
+    if let Some(vi) = &version_info {
+        if let Some(name) = &vi.original_filename {
+            headers.push(("Original Filename".into(), name.clone()));
+        }
+        if let Some(name) = &vi.product_name {
+            headers.push(("Product Name".into(), name.clone()));
+        }
+        if let Some(company) = &vi.company_name {
+            headers.push(("Company Name".into(), company.clone()));
+        }
+    }
 
     let sections: Vec<SectionInfo> = pe
         .sections
@@ -508,6 +730,8 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         rich_header,
         overlay,
         authenticode,
+        version_info,
+        icon_hashes,
     })
 }
 
@@ -624,6 +848,8 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         rich_header: None,
         overlay: None,
         authenticode: None,
+        version_info: None,
+        icon_hashes: vec![],
     })
 }
 
