@@ -26,6 +26,10 @@ struct Cli {
     /// Path to a custom rules TOML file (see `sigil --help` for format)
     #[arg(long, global = true)]
     rules: Option<String>,
+    /// Path to an imphash database (CSV: imphash,signature — e.g. a
+    /// MalwareBazaar export from https://bazaar.abuse.ch/export/)
+    #[arg(long, global = true)]
+    imphash_db: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -112,7 +116,18 @@ fn main() {
         None => None,
     };
 
-    if let Err(e) = run(cli.command, quiet, nsl, &user_cfg, custom_rules.as_ref()) {
+    let imphash_db = match &cli.imphash_db {
+        Some(path) => match sigs::load_imphash_db(path) {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("{} {:#}", "error:".red().bold(), e);
+                std::process::exit(1);
+            }
+        },
+        None => Vec::new(),
+    };
+
+    if let Err(e) = run(cli.command, quiet, nsl, &user_cfg, custom_rules.as_ref(), &imphash_db) {
         // All errors go to stderr; never pollute stdout (breaks --json pipelines)
         eprintln!("{} {:#}", "error:".red().bold(), e);
         std::process::exit(1);
@@ -125,6 +140,7 @@ fn run(
     nsl: bool,
     user_cfg: &config::SigilConfig,
     custom_rules: Option<&rules::RuleFile>,
+    imphash_db: &[sigs::ImphashRecord],
 ) -> Result<()> {
     match command {
         Commands::Scan { path, json } => {
@@ -141,6 +157,8 @@ fn run(
             let h = hashes::from_bytes(&data);
             let imphash_match = h.imphash.as_deref()
                 .and_then(|hash| sigs::check_imphash(hash, &user_cfg.known_imphashes));
+            let imphash_db_match = h.imphash.as_deref()
+                .and_then(|hash| sigs::check_imphash_db(hash, imphash_db));
 
             if json {
                 let mut obj = serde_json::to_value(&info)?;
@@ -150,6 +168,7 @@ fn run(
                 obj["custom_rule_hits"] = serde_json::to_value(&custom_hits)?;
                 obj["hashes"]        = serde_json::to_value(&h)?;
                 obj["imphash_match"] = serde_json::to_value(&imphash_match)?;
+                obj["imphash_db_match"] = serde_json::to_value(&imphash_db_match)?;
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             } else {
                 if !quiet { print_banner(&info.path, &info.format, &info.arch); }
@@ -181,6 +200,10 @@ fn run(
                 }
                 if let Some(desc) = &imphash_match {
                     println!("\n{}", "Imphash Match:".bold().red());
+                    println!("  {} {}", "⚑".red(), desc);
+                }
+                if let Some(desc) = &imphash_db_match {
+                    println!("\n{}", "Imphash DB Match:".bold().red());
                     println!("  {} {}", "⚑".red(), desc);
                 }
                 if !ad.is_empty() || !ac.is_empty() {
@@ -330,9 +353,12 @@ fn run(
             let h = hashes::compute(&path, nsl)?;
             let imphash_match = h.imphash.as_deref()
                 .and_then(|hash| sigs::check_imphash(hash, &user_cfg.known_imphashes));
+            let imphash_db_match = h.imphash.as_deref()
+                .and_then(|hash| sigs::check_imphash_db(hash, imphash_db));
             if json {
                 let mut obj = serde_json::to_value(&h)?;
                 obj["imphash_match"] = serde_json::to_value(&imphash_match)?;
+                obj["imphash_db_match"] = serde_json::to_value(&imphash_db_match)?;
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             } else {
                 if !quiet {
@@ -348,6 +374,9 @@ fn run(
                 }
                 if let Some(desc) = &imphash_match {
                     println!("  {:<10} {} {}", "match".dimmed(), "⚑".red(), desc.red());
+                }
+                if let Some(desc) = &imphash_db_match {
+                    println!("  {:<10} {} {}", "db match".dimmed(), "⚑".red(), desc.red());
                 }
             }
         }
@@ -555,6 +584,8 @@ fn run(
                 .unwrap_or_default();
             let imphash_match = h.imphash.as_deref()
                 .and_then(|hash| sigs::check_imphash(hash, &user_cfg.known_imphashes));
+            let imphash_db_match = h.imphash.as_deref()
+                .and_then(|hash| sigs::check_imphash_db(hash, imphash_db));
 
             if html {
                 let out = output.unwrap_or_else(|| format!("{}.html",
@@ -578,6 +609,7 @@ fn run(
                 obj["hashes"]        = serde_json::to_value(&h)?;
                 obj["custom_rule_hits"] = serde_json::to_value(&custom_hits)?;
                 obj["imphash_match"] = serde_json::to_value(&imphash_match)?;
+                obj["imphash_db_match"] = serde_json::to_value(&imphash_db_match)?;
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             }
         }
