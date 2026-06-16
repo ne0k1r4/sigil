@@ -91,6 +91,23 @@ pub fn generate_html(
         None => "<h2>Overlay</h2>\n<p class=\"dim\">None — file ends at the last section.</p>".to_string(),
     };
 
+    let authenticode_section: String = match &info.authenticode {
+        Some(auth) => {
+            let identities: String = auth.candidate_identities.iter().take(15)
+                .map(|s| format!("<li>{}</li>", e(s)))
+                .collect();
+            format!(
+                "<h2>Authenticode <span class=\"badge ok\">SIGNED</span></h2>\n\
+                 <p>Certificate type {} / revision 0x{:04x} / {} bytes</p>\n\
+                 <p class=\"dim\">Candidate identity strings from the certificate blob \
+                 (heuristic extraction — NOT signature verification):</p>\n\
+                 <ul>{}</ul>",
+                auth.cert_type, auth.cert_revision, auth.size, identities
+            )
+        }
+        None => "<h2>Authenticode</h2>\n<p class=\"dim\">Not digitally signed (no certificate table).</p>".to_string(),
+    };
+
 
 
     let html = format!(r#"<!DOCTYPE html>
@@ -134,6 +151,7 @@ pub fn generate_html(
 
 {overlay_section}
 
+{authenticode_section}
 
 
 
@@ -175,6 +193,7 @@ pub fn generate_html(
             .collect::<Vec<_>>().join("</tr><tr>"),
         rich_section = rich_section,
         overlay_section = overlay_section,
+        authenticode_section = authenticode_section,
 verdict = verdict,
         verdict_class = verdict_class,
         entropy = info.entropy,
