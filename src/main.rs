@@ -91,6 +91,8 @@ enum Commands {
         #[arg(short, long)] output: Option<String>,
         #[arg(long)] json: bool,
     },
+    /// Show PE resource info: VS_VERSIONINFO fields and icon hashes
+    Resources { path: String, #[arg(long)] json: bool },
 }
 
 fn main() {
@@ -162,7 +164,21 @@ fn run(
                     println!("\n{}", "TLS Callbacks:".bold().red());
                     for t in &info.tls_callbacks { println!("  {} {}", "⚑".red(), t); }
                 }
-
+                if let Some(auth) = &info.authenticode {
+                    println!("\n{}", "Authenticode:".bold().cyan());
+                    println!("  cert type {} / revision 0x{:04x} / {} bytes",
+                        auth.cert_type, auth.cert_revision, auth.size);
+                    if !auth.candidate_identities.is_empty() {
+                        println!("  candidate identities (from cert blob, unverified):");
+                        for s in auth.candidate_identities.iter().take(10) {
+                            println!("    {}", s.dimmed());
+                        }
+                    }
+                }
+                if !info.icon_hashes.is_empty() {
+                    println!("\n{} {} icon resource(s)", "Icons:".bold().cyan(), info.icon_hashes.len());
+                    for h in &info.icon_hashes { println!("  sha256 {}", h.dimmed()); }
+                }
                 if let Some(desc) = &imphash_match {
                     println!("\n{}", "Imphash Match:".bold().red());
                     println!("  {} {}", "⚑".red(), desc);
@@ -194,6 +210,9 @@ fn run(
                         "sections": info.sections,
                         "rich_header": info.rich_header,
                         "overlay": info.overlay,
+                        "authenticode": info.authenticode,
+                        "version_info": info.version_info,
+                        "icon_hashes": info.icon_hashes,
                     })
                 )?);
             } else {
@@ -682,8 +701,51 @@ fn run(
                 }
             }
         }
+
+        Commands::Resources { path, json } => {
+            let (info, _) = analyze(&path, nsl)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                    "version_info": info.version_info,
+                    "icon_hashes": info.icon_hashes,
+                }))?);
+            } else {
+                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                match &info.version_info {
+                    Some(vi) => {
+                        println!("\n{}", "Version Info:".bold().cyan());
+                        println!("{}", "─".repeat(50).dimmed());
+                        print_opt_field("CompanyName", &vi.company_name);
+                        print_opt_field("FileDescription", &vi.file_description);
+                        print_opt_field("FileVersion", &vi.file_version);
+                        print_opt_field("InternalName", &vi.internal_name);
+                        print_opt_field("LegalCopyright", &vi.legal_copyright);
+                        print_opt_field("OriginalFilename", &vi.original_filename);
+                        print_opt_field("ProductName", &vi.product_name);
+                        print_opt_field("ProductVersion", &vi.product_version);
+                    }
+                    None => println!("\n{}", "No VS_VERSIONINFO resource found.".dimmed()),
+                }
+                if !info.icon_hashes.is_empty() {
+                    println!("\n{} {} icon resource(s)", "Icons:".bold().cyan(), info.icon_hashes.len());
+                    println!("{}", "─".repeat(50).dimmed());
+                    for h in &info.icon_hashes {
+                        println!("  sha256 {}", h.yellow());
+                    }
+                } else {
+                    println!("\n{}", "No RT_ICON resources found.".dimmed());
+                }
+            }
+        }
     }
     Ok(())
+}
+
+fn print_opt_field(label: &str, value: &Option<String>) {
+    match value {
+        Some(v) => println!("  {:<18} {}", label.dimmed(), v),
+        None    => println!("  {:<18} {}", label.dimmed(), "(none)".dimmed()),
+    }
 }
 
 /// Recursively (or not) collect candidate binary file paths under `dir`.
