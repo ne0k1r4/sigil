@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -231,9 +232,63 @@ static KNOWN_IMPHASHES: &[(&str, &str)] = &[
     ("1f2d5f2b1d3b6e9a4c7d8e9f0a1b2c3d", "Example: generic UPX-packed stub (illustrative placeholder)"),
 ];
 
-/// Check a computed imphash against the built-in table and any
+/// A single imphash → description record, typically loaded from an
+/// external database file via `load_imphash_db`.
+#[derive(Debug, Clone)]
+pub struct ImphashRecord {
+    pub hash: String,
+    pub description: String,
+}
+
+/// Load an imphash database from a CSV file.
+///
+/// Accepts the MalwareBazaar "imphash" export format
+/// (https://bazaar.abuse.ch/export/) — comma-separated lines of
+/// `imphash,signature[,...]`, optionally with a header row (any row whose
+/// first field is not a 32-character hex string is skipped, so a header
+/// like `imphash,signature` is handled automatically). Extra columns are
+/// ignored. Quoted fields (`"..."`) have their quotes stripped.
+pub fn load_imphash_db(path: &str) -> Result<Vec<ImphashRecord>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read imphash database '{}'", path))?;
+
+    let mut records = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(2, ',');
+        let hash = parts.next().unwrap_or("").trim().trim_matches('"');
+        let desc = parts.next().unwrap_or("").trim().trim_matches('"');
+
+        // Skip header rows / malformed lines: a real imphash is 32 hex chars
+        if hash.len() != 32 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        records.push(ImphashRecord {
+            hash: hash.to_lowercase(),
+            description: if desc.is_empty() { "(no signature name)".to_string() } else { desc.to_string() },
+        });
+    }
+    Ok(records)
+}
+
+/// Check a computed imphash against an externally-loaded database (see
+/// `load_imphash_db`). Returns the matching record's description, if any.
+pub fn check_imphash_db(hash: &str, db: &[ImphashRecord]) -> Option<String> {
+    let hash_lower = hash.to_lowercase();
+    db.iter()
+        .find(|r| r.hash == hash_lower)
+        .map(|r| r.description.clone())
+}
+
+/// Check a computed imphash against the built-in starter table and any
 /// user-supplied entries from ~/.sigil.toml. Returns the description of
 /// the first match, if any.
+///
+/// For broader coverage, also check `check_imphash_db` against a loaded
+/// `--imphash-db` file.
 pub fn check_imphash<'a>(hash: &str, extra: &'a [SigEntry]) -> Option<String> {
     for &(h, desc) in KNOWN_IMPHASHES {
         if h.eq_ignore_ascii_case(hash) {
