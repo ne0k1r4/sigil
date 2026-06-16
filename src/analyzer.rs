@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use goblin::Object;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use std::fs;
 use std::sync::OnceLock;
 
@@ -23,6 +24,8 @@ pub struct BinaryInfo {
     pub sections: Vec<SectionInfo>,
     /// PE-only: parsed Rich header (compiler/linker fingerprint), if present
     pub rich_header: Option<RichHeaderInfo>,
+    /// PE-only: trailing data appended after the last section, if any
+    pub overlay: Option<OverlayInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -80,7 +83,15 @@ pub struct RichHeaderInfo {
     pub hash: String,
 }
 
-// ── little-endian byte readers ─────────────────────────────────────────────
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OverlayInfo {
+    /// File offset where the overlay begins (= end of the last section)
+    pub offset: u64,
+    pub size: u64,
+    pub sha256: String,
+    pub entropy: f64,
+}
+
 
 fn r16le(data: &[u8], off: usize) -> u16 {
     if off + 2 > data.len() { return 0; }
@@ -262,6 +273,30 @@ pub fn parse_tls_callbacks(data: &[u8], lfanew: u32, image_base: u64, sections: 
     callbacks
 }
 
+
+/// Compute info about any data appended after the last section ("overlay").
+/// Common for self-extracting archives, installers, and signed binaries
+/// (the Authenticode signature itself often lives in the overlay region).
+pub fn compute_overlay_info(data: &[u8], sections: &[goblin::pe::section_table::SectionTable]) -> Option<OverlayInfo> {
+    let mut last_end = 0usize;
+    for s in sections {
+        let end = s.pointer_to_raw_data as usize + s.size_of_raw_data as usize;
+        last_end = last_end.max(end);
+    }
+    if last_end > 0 && last_end < data.len() {
+        let overlay = &data[last_end..];
+        Some(OverlayInfo {
+            offset: last_end as u64,
+            size: overlay.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(overlay)),
+            entropy: shannon_entropy(overlay),
+        })
+    } else {
+        None
+    }
+}
+
+
 /// Analyse a binary, returning the parsed info *and* the raw bytes so callers
 /// can pass them on to packing_hints / hashes without re-reading the file.
 pub fn analyze(path: &str, no_size_limit: bool) -> Result<(BinaryInfo, Vec<u8>)> {
@@ -345,6 +380,16 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         headers.push(("Rich Header Hash".into(), rh.hash.clone()));
     }
 
+    let overlay = compute_overlay_info(data, &pe.sections);
+    if let Some(ov) = &overlay {
+        headers.push((
+            "Overlay".into(),
+            format!("{} bytes at 0x{:x} (entropy {:.2})", ov.size, ov.offset, ov.entropy),
+        ));
+    }
+
+
+
     let sections: Vec<SectionInfo> = pe
         .sections
         .iter()
@@ -375,6 +420,7 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         entropy,
         sections,
         rich_header,
+        overlay,
     })
 }
 
@@ -489,6 +535,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         entropy,
         sections,
         rich_header: None,
+        overlay: None,
     })
 }
 
