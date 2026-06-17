@@ -1,4 +1,5 @@
 mod analyzer;
+mod clr;
 mod config;
 mod disasm;
 mod hashes;
