@@ -137,6 +137,71 @@ pub fn generate_html(
         format!("<h2>Icon Resources</h2>\n<p>{} icon resource(s) — SHA-256:</p><ul>{}</ul>", info.icon_hashes.len(), items)
     };
 
+    let clr_section: String = match &info.clr {
+        None => "<h2>CLR / .NET</h2>\n<p class=\"dim\">Not a managed binary — no CLR header.</p>".to_string(),
+        Some(ci) => {
+            let flags_str = ci.clr_flags_desc.join(", ");
+            let obf_rows: String = if ci.obfuscator_hints.is_empty() {
+                "<tr><td class=\"ok\">No obfuscator markers detected</td></tr>".to_string()
+            } else {
+                ci.obfuscator_hints.iter()
+                    .map(|h| format!("<tr class=\"warn\"><td>{}</td></tr>", e(h)))
+                    .collect()
+            };
+            let cheat_rows: String = if ci.cheat_pattern_hits.is_empty() {
+                "<tr><td class=\"ok\">No C# cheat patterns detected</td></tr>".to_string()
+            } else {
+                ci.cheat_pattern_hits.iter()
+                    .map(|h| format!(
+                        "<tr class=\"danger\"><td>{}</td><td class=\"dim\">{}</td></tr>",
+                        e(&h.matched), e(&h.description)
+                    ))
+                    .collect()
+            };
+            let ns_list: String = ci.namespaces.iter().take(64)
+                .map(|ns| format!("<li>{}</li>", e(ns)))
+                .collect();
+            let mvid_row = ci.mvid.as_deref()
+                .map(|m| format!("<tr><th>MVID</th><td class=\"dim\">{}</td></tr>", e(m)))
+                .unwrap_or_default();
+            format!(
+                "<h2>CLR / .NET Assembly <span class=\"badge ok\">MANAGED</span></h2>\n\
+                 <table>\n\
+                 <tr><th>Assembly Name</th><td><strong>{asm}</strong></td></tr>\n\
+                 <tr><th>Version</th><td>{ver}</td></tr>\n\
+                 <tr><th>Culture</th><td>{culture}</td></tr>\n\
+                 <tr><th>CLR Runtime</th><td>{rt}</td></tr>\n\
+                 <tr><th>CLR Flags</th><td>{flags}</td></tr>\n\
+                 <tr><th>ILONLY</th><td>{ilonly}</td></tr>\n\
+                 <tr><th>Requires 32-bit</th><td>{req32}</td></tr>\n\
+                 <tr><th>Strong-Name Signed</th><td>{sn}</td></tr>\n\
+                 {mvid_row}\n\
+                 </table>\n\
+                 <h2>Obfuscator Markers</h2>\n\
+                 <table><tbody>{obf_rows}</tbody></table>\n\
+                 <h2>C# Cheat Patterns ({cheat_count})</h2>\n\
+                 <table><thead><tr><th>Matched</th><th>Description</th></tr></thead>\
+                 <tbody>{cheat_rows}</tbody></table>\n\
+                 <h2>Namespaces ({ns_count})</h2>\n\
+                 <ul>{ns_list}</ul>",
+                asm        = e(ci.assembly_name.as_deref().unwrap_or("(none)")),
+                ver        = e(ci.assembly_version.as_deref().unwrap_or("?")),
+                culture    = e(ci.culture.as_deref().unwrap_or("neutral")),
+                rt         = e(&ci.runtime_version),
+                flags      = e(&flags_str),
+                ilonly     = if ci.is_ilonly   { "YES" } else { "NO" },
+                req32      = if ci.requires_32bit { "YES" } else { "NO" },
+                sn         = if ci.strong_name_signed { "YES" } else { "NO" },
+                mvid_row   = mvid_row,
+                obf_rows   = obf_rows,
+                cheat_count = ci.cheat_pattern_hits.len(),
+                cheat_rows = cheat_rows,
+                ns_count   = ci.namespaces.len(),
+                ns_list    = ns_list,
+            )
+        }
+    };
+
     let html = format!(r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -184,6 +249,8 @@ pub fn generate_html(
 
 {icons_section}
 
+{clr_section}
+
 <h2>Entropy <span class="badge {verdict_class}">{verdict}</span></h2>
 <p>Overall: <strong>{entropy:.4}</strong> / 8.0</p>
 
@@ -225,6 +292,7 @@ pub fn generate_html(
         authenticode_section = authenticode_section,
         version_section = version_section,
         icons_section = icons_section,
+        clr_section = clr_section,
         verdict = verdict,
         verdict_class = verdict_class,
         entropy = info.entropy,
