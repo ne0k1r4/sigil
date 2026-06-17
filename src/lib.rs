@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod clr;
 pub mod config;
 pub mod hashes;
 pub mod rules;
