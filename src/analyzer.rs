@@ -32,6 +32,8 @@ pub struct BinaryInfo {
     pub version_info: Option<VersionInfo>,
     /// PE-only: SHA-256 of each RT_ICON resource, for cross-sample comparison
     pub icon_hashes: Vec<String>,
+    /// PE-only: CLR / .NET assembly metadata, present only in managed binaries
+    pub clr: Option<crate::clr::ClrInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -698,6 +700,38 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         }
     }
 
+    // Parse CLR metadata if this is a managed (.NET) assembly.
+    // Data directory 14 (COM_DESCRIPTOR) being non-zero is the definitive
+    // signal — unmanaged PE files leave it zeroed.
+    let clr = crate::clr::parse_clr(data, lfanew, &pe.sections);
+    if let Some(ref ci) = clr {
+        headers.push(("Managed (.NET)".into(), "YES".into()));
+        if let Some(ref name) = ci.assembly_name {
+            headers.push(("Assembly Name".into(), name.clone()));
+        }
+        if let Some(ref ver) = ci.assembly_version {
+            headers.push(("Assembly Version".into(), ver.clone()));
+        }
+        headers.push(("CLR Runtime".into(), ci.runtime_version.clone()));
+        headers.push(("CLR Flags".into(), ci.clr_flags_desc.join(", ")));
+        if let Some(ref mvid) = ci.mvid {
+            headers.push(("MVID".into(), mvid.clone()));
+        }
+        if ci.strong_name_signed {
+            headers.push(("Strong-Name Signed".into(), "YES".into()));
+        }
+        if !ci.obfuscator_hints.is_empty() {
+            headers.push(("Obfuscator Hints".into(),
+                format!("{} detected", ci.obfuscator_hints.len())));
+        }
+        if !ci.cheat_pattern_hits.is_empty() {
+            headers.push(("C# Cheat Patterns".into(),
+                format!("{} hit(s)", ci.cheat_pattern_hits.len())));
+        }
+    } else {
+        headers.push(("Managed (.NET)".into(), "NO".into()));
+    }
+
     let sections: Vec<SectionInfo> = pe
         .sections
         .iter()
@@ -732,6 +766,7 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         authenticode,
         version_info,
         icon_hashes,
+        clr,
     })
 }
 
@@ -850,6 +885,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         authenticode: None,
         version_info: None,
         icon_hashes: vec![],
+        clr: None,
     })
 }
 
