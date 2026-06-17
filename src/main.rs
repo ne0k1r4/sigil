@@ -15,7 +15,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 
 #[derive(Parser)]
-#[command(name = "sigil", about = "Static PE/ELF binary analyzer", version = "0.3.0")]
+#[command(name = "sigil", about = "Static PE/ELF binary analyzer", version = "0.3.1")]
 struct Cli {
     /// Suppress banner and decorative output (safe for piping / scripting)
     #[arg(long, global = true)]
@@ -97,6 +97,9 @@ enum Commands {
     },
     /// Show PE resource info: VS_VERSIONINFO fields and icon hashes
     Resources { path: String, #[arg(long)] json: bool },
+    /// Show .NET / CLR assembly metadata (assembly name, version, MVID,
+    /// type list, obfuscator hints, C# cheat pattern hits)
+    Clr { path: String, #[arg(long)] json: bool },
 }
 
 fn main() {
@@ -219,6 +222,27 @@ fn run(
                     println!("{}", "─".repeat(60).dimmed());
                     for h in &custom_hits {
                         println!("  {} {} [{}] — {}", "⚑".blue(), h.technique.bold(), h.category.dimmed(), h.matched.dimmed());
+                    }
+                }
+                if let Some(ci) = &info.clr {
+                    println!("\n{}", "CLR / .NET:".bold().cyan());
+                    println!("{}", "─".repeat(60).dimmed());
+                    println!("  {:<22} {}", "Assembly:".dimmed(),
+                        ci.assembly_name.as_deref().unwrap_or("?").yellow());
+                    println!("  {:<22} {}", "Version:".dimmed(),
+                        ci.assembly_version.as_deref().unwrap_or("?"));
+                    println!("  {:<22} {}", "Runtime:".dimmed(), ci.runtime_version);
+                    println!("  {:<22} {}", "Flags:".dimmed(), ci.clr_flags_desc.join(", "));
+                    if !ci.obfuscator_hints.is_empty() {
+                        println!("  {:<22} {} hint(s)", "Obfuscator:".yellow(),
+                            ci.obfuscator_hints.len());
+                    }
+                    if !ci.cheat_pattern_hits.is_empty() {
+                        println!("  {} {} C# cheat pattern hit(s) — run `sigil clr {}` for detail",
+                            "⚑".red(), ci.cheat_pattern_hits.len(), info.path);
+                        for hit in ci.cheat_pattern_hits.iter().take(5) {
+                            println!("    {} {} — {}", "⚑".red(), hit.matched.bold(), hit.description.dimmed());
+                        }
                     }
                 }
             }
@@ -766,6 +790,85 @@ fn run(
                     }
                 } else {
                     println!("\n{}", "No RT_ICON resources found.".dimmed());
+                }
+            }
+        }
+
+        Commands::Clr { path, json } => {
+            let (info, _) = analyze(&path, nsl)?;
+            match &info.clr {
+                None => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(
+                            &serde_json::json!({"clr": null, "managed": false})
+                        )?);
+                    } else {
+                        if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                        println!("\n{}", "Not a managed (.NET) binary — no CLR header found.".dimmed());
+                    }
+                }
+                Some(ci) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(
+                            &serde_json::json!({"managed": true, "clr": ci})
+                        )?);
+                    } else {
+                        if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+
+                        println!("\n{}", "CLR / .NET Assembly:".bold().cyan());
+                        println!("{}", "─".repeat(60).dimmed());
+                        println!("  {:<22} {}", "Assembly Name:".dimmed(),
+                            ci.assembly_name.as_deref().unwrap_or("(none)").yellow());
+                        println!("  {:<22} {}", "Version:".dimmed(),
+                            ci.assembly_version.as_deref().unwrap_or("(none)"));
+                        println!("  {:<22} {}", "Culture:".dimmed(),
+                            ci.culture.as_deref().unwrap_or("neutral"));
+                        println!("  {:<22} {}", "CLR Runtime:".dimmed(), ci.runtime_version);
+                        println!("  {:<22} {}", "CLR Flags:".dimmed(), ci.clr_flags_desc.join(", "));
+                        println!("  {:<22} {}", "ILONLY:".dimmed(),
+                            if ci.is_ilonly { "YES".green().to_string() } else { "NO".dimmed().to_string() });
+                        println!("  {:<22} {}", "Requires 32-bit:".dimmed(),
+                            if ci.requires_32bit { "YES".yellow().to_string() } else { "NO".dimmed().to_string() });
+                        println!("  {:<22} {}", "Strong-Name Signed:".dimmed(),
+                            if ci.strong_name_signed { "YES".green().to_string() } else { "NO".dimmed().to_string() });
+                        if let Some(mvid) = &ci.mvid {
+                            println!("  {:<22} {}", "MVID:".dimmed(), mvid.dimmed());
+                        }
+
+                        if !ci.namespaces.is_empty() {
+                            println!("\n{} {} namespace(s)", "Namespaces:".bold().cyan(), ci.namespaces.len());
+                            println!("{}", "─".repeat(60).dimmed());
+                            for ns in ci.namespaces.iter().take(30) {
+                                println!("  {}", ns);
+                            }
+                            if ci.namespaces.len() > 30 {
+                                println!("  … {} more (use --json)", ci.namespaces.len() - 30);
+                            }
+                        }
+
+                        if !ci.obfuscator_hints.is_empty() {
+                            println!("\n{}", "Obfuscator Hints:".bold().yellow());
+                            println!("{}", "─".repeat(60).dimmed());
+                            for h in &ci.obfuscator_hints {
+                                println!("  {} {}", "⚑".yellow(), h);
+                            }
+                        }
+
+                        if !ci.cheat_pattern_hits.is_empty() {
+                            println!("\n{} {} hit(s)",
+                                "C# Cheat Patterns:".bold().red(),
+                                ci.cheat_pattern_hits.len());
+                            println!("{}", "─".repeat(60).dimmed());
+                            for hit in &ci.cheat_pattern_hits {
+                                println!("  {} {} — {}",
+                                    "⚑".red(),
+                                    hit.matched.bold(),
+                                    hit.description.dimmed());
+                            }
+                        } else {
+                            println!("\n{}", "No C# cheat patterns detected.".green());
+                        }
+                    }
                 }
             }
         }
