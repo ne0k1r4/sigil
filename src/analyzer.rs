@@ -182,7 +182,7 @@ pub fn read_file(path: &str, no_size_limit: bool) -> Result<Vec<u8>> {
 }
 
 /// Convert an RVA to a file offset using the PE section table.
-fn rva_to_offset(rva: u64, sections: &[goblin::pe::section_table::SectionTable]) -> Option<usize> {
+pub fn rva_to_offset(rva: u64, sections: &[goblin::pe::section_table::SectionTable]) -> Option<usize> {
     for s in sections {
         let va = s.virtual_address as u64;
         let size = (s.virtual_size as u64).max(s.size_of_raw_data as u64);
