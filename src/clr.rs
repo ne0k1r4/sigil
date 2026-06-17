@@ -630,15 +630,6 @@ fn scan_types(
     (obf_hints, cheat_hits)
 }
 
-// ── test-accessible pattern slices ───────────────────────────────────────────
-// These allow integration tests to verify the pattern tables contain expected
-// entries without making the static arrays fully public (which would expose
-// them as a stable API surface).
-#[cfg(test)]
-pub use OBFUSCATOR_PATTERNS as OBFUSCATOR_PATTERNS_FOR_TEST;
-#[cfg(test)]
-pub use CHEAT_PATTERNS as CHEAT_PATTERNS_FOR_TEST;
-
 /// Parse CLR metadata from a PE binary.
 ///
 /// Returns `None` if data directory 14 (COM_DESCRIPTOR) is absent or zero,
@@ -773,12 +764,11 @@ pub fn parse_clr(
 }
 
 // ── test-accessible pattern slices ───────────────────────────────────────────
-// Public re-exports of the static pattern arrays so integration tests can
-// verify the tables contain expected entries without making them part of the
-// stable public API. Only compiled in test builds.
+// pub statics so integration tests (separate crate) can verify the tables
+// contain expected entries. Not gated with #[cfg(test)] because integration
+// tests in tests/ are compiled as a separate crate and cannot see cfg(test)
+// items from the library.
 
-#[cfg(test)]
 pub static OBFUSCATOR_PATTERNS_FOR_TEST: &[(&str, &str)] = OBFUSCATOR_PATTERNS;
 
-#[cfg(test)]
 pub static CHEAT_PATTERNS_FOR_TEST: &[(&str, &str, &str)] = CHEAT_PATTERNS;
