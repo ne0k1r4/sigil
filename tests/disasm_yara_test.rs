@@ -77,7 +77,8 @@ fn full_disasm_arch_correct_for_elf() {
 
 // ── YARA scanning ─────────────────────────────────────────────────────────────
 
-#[cfg(feature = "yara")]
+// ── YARA scanning ─────────────────────────────────────────────────────────────
+
 mod yara_tests {
     use sigil::yara_scan::scan;
     use std::io::Write;
@@ -114,7 +115,7 @@ rule MZ_header {
         let matches = scan(data, &[f.path()]).unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].rule, "MZ_header");
-        assert!(!matches[0].string_matches.is_empty());
+        assert!(!matches[0].pattern_matches.is_empty());
     }
 
     #[test]
