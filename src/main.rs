@@ -6,6 +6,7 @@ mod hashes;
 mod report;
 mod rules;
 mod sigs;
+mod yara_scan;
 
 use analyzer::{
     analyze, categorize_strings, code_section_from_bytes, extract_strings,
@@ -101,6 +102,28 @@ enum Commands {
     /// Show .NET / CLR assembly metadata (assembly name, version, MVID,
     /// type list, obfuscator hints, C# cheat pattern hits)
     Clr { path: String, #[arg(long)] json: bool },
+    /// Disassemble ALL executable sections (full binary disassembly)
+    FullDisasm {
+        path: String,
+        /// Max instructions per section (default 50000, use 0 for unlimited)
+        #[arg(short = 'n', long, default_value_t = 50000)]
+        max_insns: usize,
+        /// Show mnemonic frequency table
+        #[arg(long)]
+        freq: bool,
+        /// Show call targets (CALL xref summary)
+        #[arg(long)]
+        calls: bool,
+        #[arg(long)] json: bool,
+    },
+    /// Scan binary with YARA rules
+    Yara {
+        path: String,
+        /// YARA rule file(s) or directory containing .yar/.yara files
+        #[arg(short = 'r', long, required = true, num_args = 1..)]
+        rules: Vec<String>,
+        #[arg(long)] json: bool,
+    },
 }
 
 fn main() {
@@ -869,6 +892,100 @@ fn run(
                         } else {
                             println!("\n{}", "No C# cheat patterns detected.".green());
                         }
+                    }
+                }
+            }
+        }
+
+        Commands::FullDisasm { path, max_insns, freq, calls, json } => {
+            let (info, data) = analyze(&path, nsl)?;
+            let cap = if max_insns == 0 { usize::MAX } else { max_insns };
+            let fd = disasm::disassemble_full(&data, cap)?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&fd)?);
+            } else {
+                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                println!("\n{} full disassembly — {} instructions across {} section(s)\n",
+                    "◈".cyan().bold(), fd.total_insns, fd.sections.len());
+
+                for sec in &fd.sections {
+                    println!("{} {} @ 0x{:x}  ({} insns)",
+                        "▸".yellow(),
+                        sec.section_name.bold().yellow(),
+                        sec.base_addr,
+                        sec.instructions.len());
+                    println!("{}", "─".repeat(70).dimmed());
+                    for i in &sec.instructions {
+                        println!("  {:016x}  {:<32} {} {}",
+                            i.addr,
+                            i.bytes.dimmed(),
+                            i.mnemonic.yellow().bold(),
+                            i.op_str.white());
+                    }
+                    println!();
+                }
+
+                if freq {
+                    println!("\n{}", "Mnemonic Frequency:".bold().cyan());
+                    println!("{}", "─".repeat(40).dimmed());
+                    let mut freq_vec: Vec<(&String, &usize)> = fd.mnemonic_freq.iter().collect();
+                    freq_vec.sort_by(|a, b| b.1.cmp(a.1));
+                    for (mn, count) in freq_vec.iter().take(20) {
+                        println!("  {:<12} {}", mn.yellow(), count);
+                    }
+                }
+
+                if calls {
+                    println!("\n{} {} unique call target(s)", "Call Targets:".bold().cyan(), fd.call_targets.len());
+                    println!("{}", "─".repeat(40).dimmed());
+                    let mut call_vec: Vec<(&u64, &usize)> = fd.call_targets.iter().collect();
+                    call_vec.sort_by(|a, b| b.1.cmp(a.1));
+                    for (addr, count) in call_vec.iter().take(30) {
+                        println!("  0x{:016x}  called {} time(s)", addr, count);
+                    }
+                }
+            }
+        }
+
+        Commands::Yara { path, rules: rule_paths, json } => {
+            let data = analyzer::read_file(&path, nsl)?;
+            let matches = yara_scan::scan(&data, &rule_paths)?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&matches)?);
+            } else {
+                if !quiet {
+                    println!("\n{} YARA scan — {} rule match(es) in {}\n",
+                        "◈".cyan().bold(), matches.len(), path.yellow());
+                    println!("{}", "─".repeat(60).dimmed());
+                }
+                if matches.is_empty() {
+                    println!("{}", "No YARA rules matched.".green());
+                } else {
+                    for m in &matches {
+                        print!("  {} {}", "⚑".red(), m.rule.bold().red());
+                        if !m.namespace.is_empty() && m.namespace != "default" {
+                            print!(" [{}]", m.namespace.dimmed());
+                        }
+                        if !m.tags.is_empty() {
+                            print!(" : {}", m.tags.join(", ").cyan());
+                        }
+                        println!();
+                        for (k, v) in &m.meta {
+                            println!("    {}: {}", k.dimmed(), v);
+                        }
+                        for sm in &m.string_matches {
+                            let offsets: Vec<String> = sm.offsets.iter()
+                                .take(5)
+                                .map(|o| format!("0x{:x}", o))
+                                .collect();
+                            let trail = if sm.offsets.len() > 5 {
+                                format!(" +{} more", sm.offsets.len() - 5)
+                            } else { String::new() };
+                            println!("    {} @ {}{}", sm.identifier.yellow(), offsets.join(", "), trail.dimmed());
+                        }
+                        println!();
                     }
                 }
             }
