@@ -1,14 +1,8 @@
 /// YARA rule scanning for sigil.
 ///
-/// Loads .yar / .yara rule files and scans a binary's raw bytes against
-/// them. Uses the `yara` crate which wraps libyara. Returns structured
-/// match results including rule name, tags, metadata, and matched string
-/// offsets.
-///
-/// Installation requirement: libyara must be installed on the system.
-///   Arch:   sudo pacman -S yara
-///   Debian: sudo apt install libyara-dev
-///   macOS:  brew install yara
+/// Uses yara_x — VirusTotal's official pure-Rust YARA reimplementation.
+/// No libyara dependency, no bindgen, no C headers required.
+/// 99% compatible with existing .yar / .yara rule files.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -19,36 +13,35 @@ pub struct YaraMatch {
     pub rule: String,
     /// Rule namespace (usually the filename without extension)
     pub namespace: String,
-    /// Tags declared on the rule e.g. `rule Foo : malware packer { ... }`
+    /// Tags declared on the rule
     pub tags: Vec<String>,
-    /// key=value metadata from the `meta:` section
+    /// key=value metadata from the meta: section
     pub meta: Vec<(String, String)>,
-    /// Individual string matches within the binary
-    pub string_matches: Vec<YaraStringMatch>,
+    /// Per-pattern match offsets within the binary
+    pub pattern_matches: Vec<PatternMatch>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct YaraStringMatch {
-    /// The string identifier in the rule e.g. `$a`, `$mz_header`
+pub struct PatternMatch {
+    /// Pattern identifier e.g. `$mz`, `$a`
     pub identifier: String,
-    /// File offsets where this string was found
+    /// File offsets where this pattern was found
     pub offsets: Vec<u64>,
 }
 
-/// Load one or more YARA rule files and scan `data` against them.
+/// Load one or more YARA rule files / directories and scan `data` against them.
 ///
-/// `rule_paths` may contain individual `.yar` / `.yara` files or
-/// directories — directories are searched non-recursively for `*.yar`
-/// and `*.yara` files.
+/// `rule_paths` may contain individual `.yar`/`.yara` files or directories.
+/// Directories are searched non-recursively for `*.yar` and `*.yara` files.
 ///
-/// Returns a list of `YaraMatch` records, one per matching rule.
-/// Returns an empty list if no rules match (not an error).
+/// Returns a list of `YaraMatch` records (one per matching rule), or an empty
+/// vec when no rules match. Returns `Err` on missing paths or compile errors.
 pub fn scan(data: &[u8], rule_paths: &[String]) -> Result<Vec<YaraMatch>> {
     if rule_paths.is_empty() {
         return Ok(vec![]);
     }
 
-    // Collect individual rule files from paths (files + directory scan)
+    // Collect individual rule files
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     for path in rule_paths {
         let p = std::path::Path::new(path);
@@ -74,67 +67,63 @@ pub fn scan(data: &[u8], rule_paths: &[String]) -> Result<Vec<YaraMatch>> {
         return Ok(vec![]);
     }
 
-    // Compile all rules into a single scanner
-    let mut compiler = yara::Compiler::new()
-        .map_err(|e| anyhow::anyhow!("YARA compiler init: {}", e))?;
-
+    // Compile all rules
+    let mut compiler = yara_x::Compiler::new();
     for file in &files {
         let namespace = file
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("default")
-            .to_string();
+            .unwrap_or("default");
+        let source = std::fs::read_to_string(file)
+            .with_context(|| format!("failed to read rule file '{}'", file.display()))?;
         compiler
-            .add_rules_file_with_namespace(file, &namespace)
-            .with_context(|| format!("failed to compile YARA rules from '{}'", file.display()))?;
+            .new_namespace(namespace)
+            .add_source(source.as_str())
+            .with_context(|| format!("failed to compile '{}'", file.display()))?;
     }
+    let rules = compiler.build();
 
-    let rules = compiler
-        .compile_rules()
-        .map_err(|e| anyhow::anyhow!("YARA compile: {}", e))?;
+    // Scan
+    let mut scanner = yara_x::Scanner::new(&rules);
+    let results = scanner
+        .scan(data)
+        .map_err(|e| anyhow::anyhow!("YARA scan error: {}", e))?;
 
-    // Scan the raw bytes
-    let matches = rules
-        .scan_mem(data, 30) // 30 second timeout
-        .map_err(|e| anyhow::anyhow!("YARA scan: {}", e))?;
+    let mut out = Vec::new();
+    for m in results.matching_rules() {
+        let tags: Vec<String> = m.tags().map(|t| t.identifier().to_string()).collect();
 
-    // Convert libyara results to our serialisable types
-    let out = matches
-        .iter()
-        .map(|m| {
-            let tags: Vec<String> = m.tags.iter().map(|t| t.to_string()).collect();
+        let meta: Vec<(String, String)> = m
+            .metadata()
+            .map(|(k, v)| {
+                let val = match v {
+                    yara_x::MetaValue::Integer(i) => i.to_string(),
+                    yara_x::MetaValue::Float(f)   => f.to_string(),
+                    yara_x::MetaValue::Bool(b)     => b.to_string(),
+                    yara_x::MetaValue::String(s)   => s.to_string(),
+                    yara_x::MetaValue::Bytes(b)    => format!("{:?}", b),
+                };
+                (k.to_string(), val)
+            })
+            .collect();
 
-            let meta: Vec<(String, String)> = m
-                .metadatas
-                .iter()
-                .map(|md| {
-                    let val = match &md.value {
-                        yara::MetadataValue::Integer(i) => i.to_string(),
-                        yara::MetadataValue::Boolean(b) => b.to_string(),
-                        yara::MetadataValue::String(s)  => s.clone(),
-                    };
-                    (md.identifier.to_string(), val)
-                })
-                .collect();
+        let pattern_matches: Vec<PatternMatch> = m
+            .patterns()
+            .map(|p| PatternMatch {
+                identifier: p.identifier().to_string(),
+                offsets: p.matches().map(|om| om.range().start as u64).collect(),
+            })
+            .collect();
 
-            let string_matches: Vec<YaraStringMatch> = m
-                .strings
-                .iter()
-                .map(|s| YaraStringMatch {
-                    identifier: s.identifier.to_string(),
-                    offsets: s.matches.iter().map(|om| om.offset as u64).collect(),
-                })
-                .collect();
-
-            YaraMatch {
-                rule:      m.identifier.to_string(),
-                namespace: m.namespace.to_string(),
-                tags,
-                meta,
-                string_matches,
-            }
-        })
-        .collect();
+        out.push(YaraMatch {
+            rule:      m.identifier().to_string(),
+            namespace: m.namespace().to_string(),
+            tags,
+            meta,
+            pattern_matches,
+        });
+    }
 
     Ok(out)
 }
+
