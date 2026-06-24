@@ -119,6 +119,34 @@ fn match_strings(strings: &[String], sig: &str) -> Option<String> {
     None
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SigRule {
+    pub name: String,
+    pub desc: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExternalSigs {
+    pub antidebug_imports: Option<Vec<SigRule>>,
+    pub antidebug_strings: Option<Vec<SigRule>>,
+    pub anticheat_imports: Option<Vec<SigRule>>,
+    pub anticheat_strings: Option<Vec<SigRule>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SigRule {
+    pub name: String,
+    pub desc: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExternalSigs {
+    pub antidebug_imports: Option<Vec<SigRule>>,
+    pub antidebug_strings: Option<Vec<SigRule>>,
+    pub anticheat_imports: Option<Vec<SigRule>>,
+    pub anticheat_strings: Option<Vec<SigRule>>,
+}
+
 pub fn scan_antidebug(imports: &[(String, String)], strings: &[String]) -> Vec<SigHit> {
     let mut hits = Vec::new();
     for (lib, func) in imports {
