@@ -34,6 +34,8 @@ pub struct BinaryInfo {
     pub icon_hashes: Vec<String>,
     /// PE-only: CLR / .NET assembly metadata, present only in managed binaries
     pub clr: Option<crate::clr::ClrInfo>,
+    /// ELF-only: parsed .init_array / .preinit_array initialization constructors
+    pub elf_init_handlers: Vec<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -767,6 +769,7 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         version_info,
         icon_hashes,
         clr,
+        elf_init_handlers: vec![],
     })
 }
 
@@ -886,6 +889,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         version_info: None,
         icon_hashes: vec![],
         clr: None,
+        elf_init_handlers: vec![],
     })
 }
 
