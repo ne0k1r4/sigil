@@ -143,42 +143,44 @@ pub fn load_external_sigs(path: &str) -> anyhow::Result<ExternalSigs> {
     Ok(sigs)
 }
 
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SigRule {
-    pub name: String,
-    pub desc: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ExternalSigs {
-    pub antidebug_imports: Option<Vec<SigRule>>,
-    pub antidebug_strings: Option<Vec<SigRule>>,
-    pub anticheat_imports: Option<Vec<SigRule>>,
-    pub anticheat_strings: Option<Vec<SigRule>>,
-}
-
-/// load external sig rules from a json file — lets you add your
-/// own patterns without recompiling the whole thing
-pub fn load_external_sigs(path: &str) -> anyhow::Result<ExternalSigs> {
-    let data = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("cant read sigs file '{}': {}", path, e))?;
-    let sigs: ExternalSigs = serde_json::from_str(&data)
-        .map_err(|e| anyhow::anyhow!("bad json in sigs file '{}': {}", path, e))?;
-    Ok(sigs)
-}
-
-
-pub fn scan_antidebug(imports: &[(String, String)], strings: &[String]) -> Vec<SigHit> {
+pub fn scan_antidebug(
+    imports: &[(String, String)],
+    strings: &[String],
+    ext: Option<&ExternalSigs>,
+) -> Vec<SigHit> {
     let mut hits = Vec::new();
+    
+    let mut imp_sigs: Vec<(&str, &str)> = ANTIDEBUG_IMPORTS.iter().map(|&(s, d)| (s, d)).collect();
+    let ext_imp_storage: Vec<(String, String)>;
+    if let Some(ext_sigs) = ext {
+        if let Some(ext_imps) = &ext_sigs.antidebug_imports {
+            ext_imp_storage = ext_imps.iter().map(|r| (r.name.clone(), r.desc.clone())).collect();
+            for (s, d) in &ext_imp_storage {
+                imp_sigs.push((s.as_str(), d.as_str()));
+            }
+        }
+    }
+    
     for (lib, func) in imports {
-        for &(sig, desc) in ANTIDEBUG_IMPORTS {
+        for &(sig, desc) in &imp_sigs {
             if func.eq_ignore_ascii_case(sig) {
                 hits.push(SigHit { category: "anti-debug".into(), technique: desc.into(), matched: format!("{}!{}", lib, func) });
             }
         }
     }
-    for &(sig, desc) in ANTIDEBUG_STRINGS {
+    
+    let mut str_sigs: Vec<(&str, &str)> = ANTIDEBUG_STRINGS.iter().map(|&(s, d)| (s, d)).collect();
+    let ext_str_storage: Vec<(String, String)>;
+    if let Some(ext_sigs) = ext {
+        if let Some(ext_strs) = &ext_sigs.antidebug_strings {
+            ext_str_storage = ext_strs.iter().map(|r| (r.name.clone(), r.desc.clone())).collect();
+            for (s, d) in &ext_str_storage {
+                str_sigs.push((s.as_str(), d.as_str()));
+            }
+        }
+    }
+    
+    for &(sig, desc) in &str_sigs {
         if let Some(m) = match_strings(strings, sig) {
             hits.push(SigHit { category: "anti-debug".into(), technique: desc.into(), matched: m });
         }
@@ -186,16 +188,44 @@ pub fn scan_antidebug(imports: &[(String, String)], strings: &[String]) -> Vec<S
     hits
 }
 
-pub fn scan_anticheat(imports: &[(String, String)], strings: &[String]) -> Vec<SigHit> {
+pub fn scan_anticheat(
+    imports: &[(String, String)],
+    strings: &[String],
+    ext: Option<&ExternalSigs>,
+) -> Vec<SigHit> {
     let mut hits = Vec::new();
+    
+    let mut imp_sigs: Vec<(&str, &str)> = ANTICHEAT_IMPORTS.iter().map(|&(s, d)| (s, d)).collect();
+    let ext_imp_storage: Vec<(String, String)>;
+    if let Some(ext_sigs) = ext {
+        if let Some(ext_imps) = &ext_sigs.anticheat_imports {
+            ext_imp_storage = ext_imps.iter().map(|r| (r.name.clone(), r.desc.clone())).collect();
+            for (s, d) in &ext_imp_storage {
+                imp_sigs.push((s.as_str(), d.as_str()));
+            }
+        }
+    }
+    
     for (lib, func) in imports {
-        for &(sig, desc) in ANTICHEAT_IMPORTS {
+        for &(sig, desc) in &imp_sigs {
             if func.eq_ignore_ascii_case(sig) {
                 hits.push(SigHit { category: "anti-cheat".into(), technique: desc.into(), matched: format!("{}!{}", lib, func) });
             }
         }
     }
-    for &(sig, desc) in ANTICHEAT_STRINGS {
+    
+    let mut str_sigs: Vec<(&str, &str)> = ANTICHEAT_STRINGS.iter().map(|&(s, d)| (s, d)).collect();
+    let ext_str_storage: Vec<(String, String)>;
+    if let Some(ext_sigs) = ext {
+        if let Some(ext_strs) = &ext_sigs.anticheat_strings {
+            ext_str_storage = ext_strs.iter().map(|r| (r.name.clone(), r.desc.clone())).collect();
+            for (s, d) in &ext_str_storage {
+                str_sigs.push((s.as_str(), d.as_str()));
+            }
+        }
+    }
+    
+    for &(sig, desc) in &str_sigs {
         if let Some(m) = match_strings(strings, sig) {
             hits.push(SigHit { category: "anti-cheat".into(), technique: desc.into(), matched: m });
         }
@@ -217,8 +247,9 @@ pub fn scan_antidebug_with_config(
     strings: &[String],
     extra_imports: &[SigEntry],
     extra_strings: &[SigEntry],
+    ext: Option<&ExternalSigs>,
 ) -> Vec<SigHit> {
-    let mut hits = scan_antidebug(imports, strings);
+    let mut hits = scan_antidebug(imports, strings, ext);
     for (lib, func) in imports {
         for sig in extra_imports {
             if func.eq_ignore_ascii_case(&sig.pattern) {
@@ -247,8 +278,9 @@ pub fn scan_anticheat_with_config(
     strings: &[String],
     extra_imports: &[SigEntry],
     extra_strings: &[SigEntry],
+    ext: Option<&ExternalSigs>,
 ) -> Vec<SigHit> {
-    let mut hits = scan_anticheat(imports, strings);
+    let mut hits = scan_anticheat(imports, strings, ext);
     for (lib, func) in imports {
         for sig in extra_imports {
             if func.eq_ignore_ascii_case(&sig.pattern) {
