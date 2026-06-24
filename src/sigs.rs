@@ -133,6 +133,17 @@ pub struct ExternalSigs {
     pub anticheat_strings: Option<Vec<SigRule>>,
 }
 
+/// load external sig rules from a json file — lets you add your
+/// own patterns without recompiling the whole thing
+pub fn load_external_sigs(path: &str) -> anyhow::Result<ExternalSigs> {
+    let data = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("cant read sigs file '{}': {}", path, e))?;
+    let sigs: ExternalSigs = serde_json::from_str(&data)
+        .map_err(|e| anyhow::anyhow!("bad json in sigs file '{}': {}", path, e))?;
+    Ok(sigs)
+}
+
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SigRule {
     pub name: String,
@@ -146,6 +157,17 @@ pub struct ExternalSigs {
     pub anticheat_imports: Option<Vec<SigRule>>,
     pub anticheat_strings: Option<Vec<SigRule>>,
 }
+
+/// load external sig rules from a json file — lets you add your
+/// own patterns without recompiling the whole thing
+pub fn load_external_sigs(path: &str) -> anyhow::Result<ExternalSigs> {
+    let data = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("cant read sigs file '{}': {}", path, e))?;
+    let sigs: ExternalSigs = serde_json::from_str(&data)
+        .map_err(|e| anyhow::anyhow!("bad json in sigs file '{}': {}", path, e))?;
+    Ok(sigs)
+}
+
 
 pub fn scan_antidebug(imports: &[(String, String)], strings: &[String]) -> Vec<SigHit> {
     let mut hits = Vec::new();
