@@ -871,6 +871,37 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         })
         .collect();
 
+    let mut elf_init_handlers = Vec::new();
+    let is_little = elf.little_endian;
+    for sh in &elf.section_headers {
+        let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
+        if name == ".init_array" || name == ".preinit_array" {
+            let off = sh.sh_offset as usize;
+            let sz = sh.sh_size as usize;
+            let sec_data = data.get(off..off + sz).unwrap_or(&[]);
+            let ptr_sz = if elf.is_64 { 8 } else { 4 };
+            for chunk in sec_data.chunks_exact(ptr_sz) {
+                let addr = if elf.is_64 {
+                    if is_little {
+                        u64::from_le_bytes(chunk.try_into().unwrap_or([0; 8]))
+                    } else {
+                        u64::from_be_bytes(chunk.try_into().unwrap_or([0; 8]))
+                    }
+                } else {
+                    let val = if is_little {
+                        u32::from_le_bytes(chunk.try_into().unwrap_or([0; 4]))
+                    } else {
+                        u32::from_be_bytes(chunk.try_into().unwrap_or([0; 4]))
+                    };
+                    val as u64
+                };
+                if addr > 0 {
+                    elf_init_handlers.push(addr);
+                }
+            }
+        }
+    }
+
     Ok(BinaryInfo {
         path: path.to_string(),
         format: "ELF".into(),
@@ -889,7 +920,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         version_info: None,
         icon_hashes: vec![],
         clr: None,
-        elf_init_handlers: vec![],
+        elf_init_handlers,
     })
 }
 
