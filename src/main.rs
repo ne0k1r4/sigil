@@ -225,7 +225,24 @@ fn run(
                     println!("\n{}", "TLS Callbacks:".bold().red());
                     for t in &info.tls_callbacks { println!("  {} {}", "⚑".red(), t); }
                 }
-
+                // rich header — compiler/linker toolchain fingerprint from MSVC PE stubs
+                if let Some(rh) = &info.rich_header {
+                    println!("\n{}", "Rich Header:".bold().cyan());
+                    println!("{}", "─".repeat(60).dimmed());
+                    println!("  {:<22} {}", "Hash:".dimmed(), rh.hash.yellow());
+                    println!("  {:<12} {:<12} {:<12} {}", "CompID".dimmed(), "ProdID".dimmed(), "Build".dimmed(), "Count".dimmed());
+                    for en in &rh.entries {
+                        println!("  0x{:08x}   {:<12} {:<12} {}", en.comp_id, en.product_id, en.build_number, en.count);
+                    }
+                }
+                // elf init handlers — constructors from .init_array/.preinit_array
+                if !info.elf_init_handlers.is_empty() {
+                    println!("\n{} {} handler(s)", "ELF Init Array:".bold().yellow(), info.elf_init_handlers.len());
+                    println!("{}", "─".repeat(60).dimmed());
+                    for addr in &info.elf_init_handlers {
+                        println!("  {} 0x{:016x}", "▸".yellow(), addr);
+                    }
+                }
                 if let Some(auth) = &info.authenticode {
                     println!("\n{}", "Authenticode:".bold().cyan());
                     println!("  cert type {} / revision 0x{:04x} / {} bytes",
