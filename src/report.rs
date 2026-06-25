@@ -60,6 +60,22 @@ pub fn generate_html(
         info.tls_callbacks.iter().map(|t| format!("<tr class=\"danger\"><td>{}</td></tr>", e(t))).collect()
     };
 
+    // elf init handlers - constructors that run before main()
+    let init_handlers_section: String = if info.elf_init_handlers.is_empty() {
+        String::new()
+    } else {
+        let rows: String = info.elf_init_handlers.iter()
+            .map(|addr| format!("<tr class=\"warn\"><td>0x{:016x}</td></tr>", addr))
+            .collect();
+        format!(
+            "<h2>ELF Init Handlers ({count})</h2>\n\
+             <p class=\"dim\">Constructors from .init_array / .preinit_array &mdash; these run before main().</p>\n\
+             <table><thead><tr><th>Address</th></tr></thead><tbody>{rows}</tbody></table>",
+            count = info.elf_init_handlers.len(),
+            rows = rows
+        )
+    };
+
     let rich_section: String = match &info.rich_header {
         Some(rh) => {
             let rows: String = rh.entries.iter()
@@ -263,6 +279,8 @@ pub fn generate_html(
 <h2>TLS Callbacks</h2>
 <table><tbody>{tls_rows}</tbody></table>
 
+{init_handlers_section}
+
 <h2>Anti-Debug Detections ({ad_count})</h2>
 <table><thead><tr><th>Technique</th><th>Matched</th></tr></thead><tbody>{ad_rows}</tbody></table>
 
@@ -299,6 +317,7 @@ pub fn generate_html(
         hints_rows = hints_rows,
         sections_rows = sections_rows,
         tls_rows = tls_rows,
+        init_handlers_section = init_handlers_section,
         ad_count = ad_hits.len(),
         ad_rows = sig_rows(ad_hits),
         ac_count = ac_hits.len(),
