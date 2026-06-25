@@ -366,7 +366,7 @@ mod sigs {
     #[test]
     fn detects_is_debugger_present() {
         let imports = vec![imp("KERNEL32.dll", "IsDebuggerPresent")];
-        let hits = scan_antidebug(&imports, &[]);
+        let hits = scan_antidebug(&imports, &[], None);
         assert!(!hits.is_empty(), "should detect IsDebuggerPresent");
         assert!(hits.iter().any(|h| h.matched.contains("IsDebuggerPresent")));
     }
@@ -374,35 +374,35 @@ mod sigs {
     #[test]
     fn detects_nt_set_information_thread() {
         let imports = vec![imp("ntdll.dll", "NtSetInformationThread")];
-        let hits = scan_antidebug(&imports, &[]);
+        let hits = scan_antidebug(&imports, &[], None);
         assert!(!hits.is_empty());
     }
 
     #[test]
     fn detects_vanguard_string() {
         let strings = vec!["vgk.sys loaded".to_string()];
-        let hits = scan_anticheat(&[], &strings);
+        let hits = scan_anticheat(&[], &strings, None);
         assert!(!hits.is_empty(), "should detect vgk.sys reference");
     }
 
     #[test]
     fn detects_battleye_string() {
         let strings = vec!["BattlEye Service".to_string()];
-        let hits = scan_anticheat(&[], &strings);
+        let hits = scan_anticheat(&[], &strings, None);
         assert!(!hits.is_empty());
     }
 
     #[test]
     fn detects_write_process_memory() {
         let imports = vec![imp("KERNEL32.dll", "WriteProcessMemory")];
-        let hits = scan_anticheat(&imports, &[]);
+        let hits = scan_anticheat(&imports, &[], None);
         assert!(!hits.is_empty());
     }
 
     #[test]
     fn case_insensitive_import_match() {
         let imports = vec![imp("kernel32.dll", "isdebuggerpresent")];
-        let hits = scan_antidebug(&imports, &[]);
+        let hits = scan_antidebug(&imports, &[], None);
         assert!(!hits.is_empty(), "import match should be case-insensitive");
     }
 
@@ -410,8 +410,8 @@ mod sigs {
     fn clean_binary_no_hits() {
         let imports = vec![imp("KERNEL32.dll", "CreateFileA"),
                            imp("KERNEL32.dll", "ReadFile")];
-        let ad = scan_antidebug(&imports, &[]);
-        let ac = scan_anticheat(&imports, &[]);
+        let ad = scan_antidebug(&imports, &[], None);
+        let ac = scan_anticheat(&imports, &[], None);
         assert!(ad.is_empty(), "clean imports should not trigger antidebug");
         assert!(ac.is_empty(), "clean imports should not trigger anticheat");
     }
