@@ -17,7 +17,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 
 #[derive(Parser)]
-#[command(name = "sigil", about = "Static PE/ELF binary analyzer", version = "0.4.0")]
+#[command(name = "sigil", about = "Static PE/ELF binary analyzer", version = "0.3.1")]
 struct Cli {
     /// Suppress banner and decorative output (safe for piping / scripting)
     #[arg(long, global = true)]
@@ -25,9 +25,12 @@ struct Cli {
     /// Bypass the 256 MB file size cap
     #[arg(long, global = true)]
     no_size_limit: bool,
-    /// Path to a custom rules TOML file (see `sigil --help` for format)
-    #[arg(long, global = true)]
+    /// Path to a custom signature rules TOML file
+    #[arg(long = "custom-rules", global = true)]
     rules: Option<String>,
+    /// Path to external signature rules (JSON) for anti-debug/anti-cheat scanning
+    #[arg(long, global = true)]
+    sigs: Option<String>,
     /// Path to an imphash database (CSV: imphash,signature — e.g. a
     /// MalwareBazaar export from https://bazaar.abuse.ch/export/)
     #[arg(long, global = true)]
@@ -154,7 +157,18 @@ fn main() {
         None => Vec::new(),
     };
 
-    if let Err(e) = run(cli.command, quiet, nsl, &user_cfg, custom_rules.as_ref(), &imphash_db) {
+    let ext_sigs = match &cli.sigs {
+        Some(path) => match sigs::load_external_sigs(path) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("{} {:#}", "error:".red().bold(), e);
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
+
+    if let Err(e) = run(cli.command, quiet, nsl, &user_cfg, custom_rules.as_ref(), &imphash_db, ext_sigs.as_ref()) {
         // All errors go to stderr; never pollute stdout (breaks --json pipelines)
         eprintln!("{} {:#}", "error:".red().bold(), e);
         std::process::exit(1);
@@ -168,15 +182,16 @@ fn run(
     user_cfg: &config::SigilConfig,
     custom_rules: Option<&rules::RuleFile>,
     imphash_db: &[sigs::ImphashRecord],
+    ext_sigs: Option<&sigs::ExternalSigs>,
 ) -> Result<()> {
     match command {
         Commands::Scan { path, json } => {
             let (info, data) = analyze(&path, nsl)?;
             let tuples = import_tuples(&info);
             let ad     = sigs::scan_antidebug_with_config(
-                &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings);
+                &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings, ext_sigs);
             let ac     = sigs::scan_anticheat_with_config(
-                &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings);
+                &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings, ext_sigs);
             let hints  = packing_hints_from_bytes(&data).unwrap_or_default();
             let custom_hits = custom_rules
                 .map(|r| rules::scan_rules(r, &data, &info.strings))
@@ -210,6 +225,7 @@ fn run(
                     println!("\n{}", "TLS Callbacks:".bold().red());
                     for t in &info.tls_callbacks { println!("  {} {}", "⚑".red(), t); }
                 }
+
                 if let Some(auth) = &info.authenticode {
                     println!("\n{}", "Authenticode:".bold().cyan());
                     println!("  cert type {} / revision 0x{:04x} / {} bytes",
@@ -472,7 +488,7 @@ fn run(
             let (info, _) = analyze(&path, nsl)?;
             let hits = sigs::scan_antidebug_with_config(
                 &import_tuples(&info), &info.strings,
-                &user_cfg.antidebug_imports, &user_cfg.antidebug_strings);
+                &user_cfg.antidebug_imports, &user_cfg.antidebug_strings, ext_sigs);
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
@@ -494,7 +510,7 @@ fn run(
             let (info, _) = analyze(&path, nsl)?;
             let hits = sigs::scan_anticheat_with_config(
                 &import_tuples(&info), &info.strings,
-                &user_cfg.anticheat_imports, &user_cfg.anticheat_strings);
+                &user_cfg.anticheat_imports, &user_cfg.anticheat_strings, ext_sigs);
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
@@ -622,9 +638,9 @@ fn run(
             let (info, data) = analyze(&path, nsl)?;
             let tuples  = import_tuples(&info);
             let ad_hits = sigs::scan_antidebug_with_config(
-                &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings);
+                &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings, ext_sigs);
             let ac_hits = sigs::scan_anticheat_with_config(
-                &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings);
+                &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings, ext_sigs);
             let hints   = packing_hints_from_bytes(&data).unwrap_or_default();
             let h       = hashes::from_bytes(&data);
             let custom_hits = custom_rules
@@ -679,9 +695,9 @@ fn run(
                     Ok((info, data)) => {
                         let tuples = import_tuples(&info);
                         let ad = sigs::scan_antidebug_with_config(
-                            &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings);
+                            &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings, ext_sigs);
                         let ac = sigs::scan_anticheat_with_config(
-                            &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings);
+                            &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings, ext_sigs);
                         let h = hashes::from_bytes(&data);
                         let verdict = packing_verdict(info.entropy);
                         results.push(serde_json::json!({
