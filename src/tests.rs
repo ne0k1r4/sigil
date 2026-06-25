@@ -2,8 +2,10 @@
 mod tests {
     use crate::analyzer::{
         categorize_strings, extract_strings, pattern_search, shannon_entropy,
+        parse_rich_header,
     };
     use crate::hashes::compute_imphash;
+    use crate::sigs::{ExternalSigs, SigRule};
 
     #[test]
     fn test_shannon_entropy() {
@@ -84,5 +86,137 @@ mod tests {
         // Non-PE dummy data
         let dummy_data = b"MZ\x00\x00notapefile";
         assert!(compute_imphash(dummy_data).is_none());
+    }
+
+    // ── rich header tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_rich_header_basic() {
+        // build a minimal fake PE stub with a valid rich header
+        // layout: 0x00..0x3C = MZ stub, lfanew @ 0x3C points to 0x200
+        // 0x80..end of rich = encoded DanS + entries + "Rich" + key
+        let lfanew: u32 = 0x200;
+        let key: u32 = 0xDEADBEEF;
+        let dans_marker: u32 = 0x536E_6144; // "DanS"
+
+        // one entry: comp_id = 0x00010002, count = 5
+        let comp_id: u32 = 0x0001_0002;
+        let count: u32 = 5;
+
+        let mut data = vec![0u8; 0x200];
+        // MZ signature
+        data[0] = b'M';
+        data[1] = b'Z';
+        // lfanew at offset 0x3C
+        data[0x3C..0x40].copy_from_slice(&lfanew.to_le_bytes());
+
+        // place rich header starting at 0x80
+        let off = 0x80;
+        // DanS ^ key
+        let enc_dans = dans_marker ^ key;
+        data[off..off + 4].copy_from_slice(&enc_dans.to_le_bytes());
+        // 3 padding dwords (all XOR'd with key, so just key since original is 0)
+        for i in 1..4 {
+            data[off + i * 4..off + (i + 1) * 4].copy_from_slice(&key.to_le_bytes());
+        }
+        // entry: comp_id ^ key, count ^ key
+        let entry_off = off + 16;
+        data[entry_off..entry_off + 4].copy_from_slice(&(comp_id ^ key).to_le_bytes());
+        data[entry_off + 4..entry_off + 8].copy_from_slice(&(count ^ key).to_le_bytes());
+        // "Rich" marker
+        let rich_off = entry_off + 8;
+        data[rich_off..rich_off + 4].copy_from_slice(b"Rich");
+        // XOR key after "Rich"
+        data[rich_off + 4..rich_off + 8].copy_from_slice(&key.to_le_bytes());
+
+        let result = parse_rich_header(&data, lfanew);
+        assert!(result.is_some(), "should parse our synthetic rich header");
+
+        let rh = result.unwrap();
+        assert_eq!(rh.entries.len(), 1);
+        assert_eq!(rh.entries[0].comp_id, comp_id);
+        assert_eq!(rh.entries[0].product_id, 1);   // high 16 of 0x00010002
+        assert_eq!(rh.entries[0].build_number, 2);  // low 16 of 0x00010002
+        assert_eq!(rh.entries[0].count, count);
+        // hash should be a valid 32-char hex md5
+        assert_eq!(rh.hash.len(), 32);
+        assert!(rh.hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_rich_header_no_marker() {
+        // data that has no "Rich" marker at all should return None
+        let data = vec![0u8; 0x200];
+        assert!(parse_rich_header(&data, 0x200).is_none());
+    }
+
+    #[test]
+    fn test_rich_header_too_small() {
+        // lfanew less than 0x80 should bail early
+        let data = vec![0u8; 0x100];
+        assert!(parse_rich_header(&data, 0x40).is_none());
+    }
+
+    // ── external sigs tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_external_sigs_deserialize() {
+        // make sure our json schema actually works the way we expect
+        let json = r#"{
+            "antidebug_imports": [
+                {"name": "NtQueryInformationProcess", "desc": "custom ntquery check"}
+            ],
+            "antidebug_strings": null,
+            "anticheat_imports": [],
+            "anticheat_strings": [
+                {"name": "BattlEye", "desc": "battleye string match"}
+            ]
+        }"#;
+
+        let sigs: ExternalSigs = serde_json::from_str(json).unwrap();
+        assert_eq!(sigs.antidebug_imports.as_ref().unwrap().len(), 1);
+        assert_eq!(sigs.antidebug_imports.as_ref().unwrap()[0].name, "NtQueryInformationProcess");
+        assert!(sigs.antidebug_strings.is_none());
+        assert!(sigs.anticheat_imports.as_ref().unwrap().is_empty());
+        assert_eq!(sigs.anticheat_strings.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_external_sigs_empty_json() {
+        // completely empty object should work — all fields Optional
+        let json = "{}";
+        let sigs: ExternalSigs = serde_json::from_str(json).unwrap();
+        assert!(sigs.antidebug_imports.is_none());
+        assert!(sigs.antidebug_strings.is_none());
+        assert!(sigs.anticheat_imports.is_none());
+        assert!(sigs.anticheat_strings.is_none());
+    }
+
+    #[test]
+    fn test_external_sigs_scan_integration() {
+        // external rules should actually produce hits when matched
+        use crate::sigs::{scan_antidebug, scan_anticheat};
+
+        let imports = vec![
+            ("kernel32.dll".to_string(), "IsDebuggerPresent".to_string()),
+            ("custom.dll".to_string(), "MyCustomFunc".to_string()),
+        ];
+        let strings = vec!["some random string".to_string()];
+
+        let ext = ExternalSigs {
+            antidebug_imports: Some(vec![SigRule {
+                name: "MyCustomFunc".to_string(),
+                desc: "custom anti-debug func".to_string(),
+            }]),
+            antidebug_strings: None,
+            anticheat_imports: None,
+            anticheat_strings: None,
+        };
+
+        // scan with ext sigs — should find both the built-in IsDebuggerPresent
+        // AND our custom MyCustomFunc
+        let hits = scan_antidebug(&imports, &strings, Some(&ext));
+        let custom_hit = hits.iter().find(|h| h.matched.contains("MyCustomFunc"));
+        assert!(custom_hit.is_some(), "external sig should produce a hit");
     }
 }
