@@ -40,6 +40,8 @@ pub struct BinaryInfo {
     pub pdb_path: Option<String>,
     // PE/ELF: warnings about sus sections (high entropy, packer names, etc.)
     pub section_warnings: Vec<String>,
+    // ELF-only: program segments parsed from headers
+    pub elf_segments: Vec<ElfSegmentInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -67,6 +69,15 @@ pub struct SectionInfo {
     pub name: String,
     pub size: u64,
     pub entropy: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ElfSegmentInfo {
+    pub segment_type: String,
+    pub flags: String,
+    pub vaddr: u64,
+    pub memsz: u64,
+    pub filesz: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -765,6 +776,8 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         })
         .collect();
 
+    let section_warnings = detect_section_anomalies(&sections);
+
     Ok(BinaryInfo {
         path: path.to_string(),
         format: "PE".into(),
@@ -785,7 +798,8 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         clr,
         elf_init_handlers: vec![],
         pdb_path,
-        section_warnings: detect_section_anomalies(&sections),
+        section_warnings,
+        elf_segments: vec![],
     })
 }
 
@@ -918,6 +932,18 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         }
     }
 
+    let elf_segments: Vec<ElfSegmentInfo> = elf.program_headers.iter().map(|ph| {
+        ElfSegmentInfo {
+            segment_type: ph_type_to_str(ph.p_type),
+            flags: ph_flags_to_str(ph.p_flags),
+            vaddr: ph.p_vaddr,
+            memsz: ph.p_memsz,
+            filesz: ph.p_filesz,
+        }
+    }).collect();
+
+    let section_warnings = detect_section_anomalies(&sections);
+
     Ok(BinaryInfo {
         path: path.to_string(),
         format: "ELF".into(),
@@ -938,7 +964,8 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         clr: None,
         elf_init_handlers,
         pdb_path: None,
-        section_warnings: detect_section_anomalies(&sections),
+        section_warnings,
+        elf_segments,
     })
 }
 
@@ -1207,4 +1234,31 @@ pub fn detect_section_anomalies(sections: &[SectionInfo]) -> Vec<String> {
         }
     }
     warnings
+}
+
+// map raw ELF phdr segment type to string
+fn ph_type_to_str(p_type: u32) -> String {
+    match p_type {
+        0 => "NULL".into(),
+        1 => "LOAD".into(),
+        2 => "DYNAMIC".into(),
+        3 => "INTERP".into(),
+        4 => "NOTE".into(),
+        5 => "SHLIB".into(),
+        6 => "PHDR".into(),
+        7 => "TLS".into(),
+        0x6474e550 => "GNU_EH_FRAME".into(),
+        0x6474e551 => "GNU_STACK".into(),
+        0x6474e552 => "GNU_RELRO".into(),
+        0x6474e553 => "GNU_PROPERTY".into(),
+        other => format!("0x{:08x}", other),
+    }
+}
+
+// map segment flags to read/write/execute string representation
+fn ph_flags_to_str(flags: u32) -> String {
+    let r = if flags & 4 != 0 { "R" } else { "-" };
+    let w = if flags & 2 != 0 { "W" } else { "-" };
+    let x = if flags & 1 != 0 { "X" } else { "-" };
+    format!("{}{}{}", r, w, x)
 }
