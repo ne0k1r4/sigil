@@ -243,6 +243,23 @@ fn run(
                         println!("  {} 0x{:016x}", "▸".yellow(), addr);
                     }
                 }
+                // elf segments — program headers memory layout
+                if !info.elf_segments.is_empty() {
+                    println!("\n{} {} segment(s)", "ELF Program Headers:".bold().cyan(), info.elf_segments.len());
+                    println!("{}", "─".repeat(60).dimmed());
+                    println!("  {:<16} {:<8} {:<18} {:<12} {}", "Type".dimmed(), "Flags".dimmed(), "VirtAddr".dimmed(), "MemSize".dimmed(), "FileSize".dimmed());
+                    for s in &info.elf_segments {
+                        println!("  {:<16} {:<8} 0x{:016x} {:<12} {}", s.segment_type, s.flags, s.vaddr, s.memsz, s.filesz);
+                    }
+                }
+                // section warnings — suspicious names / high entropy packer checks
+                if !info.section_warnings.is_empty() {
+                    println!("\n{}", "Section Warnings / Anomalies:".bold().red());
+                    println!("{}", "─".repeat(60).dimmed());
+                    for w in &info.section_warnings {
+                        println!("  {} {}", "⚠️".red(), w.red());
+                    }
+                }
                 if let Some(auth) = &info.authenticode {
                     println!("\n{}", "Authenticode:".bold().cyan());
                     println!("  cert type {} / revision 0x{:04x} / {} bytes",
