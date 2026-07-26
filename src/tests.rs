@@ -4,7 +4,7 @@ mod tests {
         categorize_strings, extract_strings, pattern_search, shannon_entropy,
         parse_rich_header,
     };
-    use crate::hashes::compute_imphash;
+    use crate::hashes::from_bytes;
     use crate::sigs::{ExternalSigs, SigRule};
 
     #[test]
@@ -51,12 +51,12 @@ mod tests {
     #[test]
     fn test_extract_strings() {
         let data = b"\x00\x01Hello\x00\x02World!\x03\x04\xff";
-        let res = extract_strings(data);
+        let res = extract_strings(data, 4);
         assert_eq!(res, vec!["Hello", "World!"]);
 
         // Too short strings should be skipped
         let short_data = b"abc\x00de\x00f";
-        let res_short = extract_strings(short_data);
+        let res_short = extract_strings(short_data, 4);
         assert!(res_short.is_empty());
     }
 
@@ -85,8 +85,10 @@ mod tests {
     fn test_imphash_none_on_invalid_pe() {
         // Non-PE dummy data
         let dummy_data = b"MZ\x00\x00notapefile";
-        assert!(compute_imphash(dummy_data).is_none());
+        assert!(from_bytes(dummy_data).imphash.is_none());
     }
+
+
 
     // ── rich header tests ────────────────────────────────────────────
 

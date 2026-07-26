@@ -7,3 +7,6 @@ pub mod report;
 pub mod rules;
 pub mod sigs;
 pub mod yara_scan;
+
+#[cfg(test)]
+mod tests;
