@@ -38,6 +38,8 @@ pub struct BinaryInfo {
     pub elf_init_handlers: Vec<u64>,
     // PE-only: debug pdb path if they didn't strip it
     pub pdb_path: Option<String>,
+    // PE/ELF: warnings about sus sections (high entropy, packer names, etc.)
+    pub section_warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -783,6 +785,7 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         clr,
         elf_init_handlers: vec![],
         pdb_path,
+        section_warnings: detect_section_anomalies(&sections),
     })
 }
 
@@ -935,6 +938,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         clr: None,
         elf_init_handlers,
         pdb_path: None,
+        section_warnings: detect_section_anomalies(&sections),
     })
 }
 
@@ -1179,4 +1183,28 @@ pub fn packing_verdict(entropy: f64) -> &'static str {
     } else {
         "NORMAL"
     }
+}
+
+// check if there's any crazy high entropy or sus section names (like UPX or whatever)
+pub fn detect_section_anomalies(sections: &[SectionInfo]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let sus_names = [
+        "upx", "aspack", "pecmp", "fsg", "yoda", "themida", "vmp", "saferg",
+        "pack", "crypt", "crpt", "protect"
+    ];
+    for s in sections {
+        let name_lower = s.name.to_lowercase();
+        // check if name is sus
+        for &sus in &sus_names {
+            if name_lower.contains(sus) {
+                warnings.push(format!("suspicious section name '{}' (possible packer/protector)", s.name));
+                break;
+            }
+        }
+        // check for high entropy (potential encrypted/packed payload)
+        if s.entropy > 7.9 && s.size > 1024 {
+            warnings.push(format!("section '{}' has crazy high entropy ({:.3}) - probably packed/encrypted", s.name, s.entropy));
+        }
+    }
+    warnings
 }
