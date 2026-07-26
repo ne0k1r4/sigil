@@ -221,4 +221,39 @@ mod tests {
         let custom_hit = hits.iter().find(|h| h.matched.contains("MyCustomFunc"));
         assert!(custom_hit.is_some(), "external sig should produce a hit");
     }
+
+    #[test]
+    fn test_detect_section_anomalies_packer_names() {
+        use crate::analyzer::{SectionInfo, detect_section_anomalies};
+
+        let sections = vec![
+            SectionInfo {
+                name: ".text".to_string(),
+                size: 1000,
+                entropy: 3.5,
+            },
+            SectionInfo {
+                name: "UPX0".to_string(),
+                size: 2000,
+                entropy: 4.0,
+            },
+            SectionInfo {
+                name: ".aspack".to_string(),
+                size: 500,
+                entropy: 2.0,
+            },
+            SectionInfo {
+                name: ".data".to_string(),
+                size: 5000,
+                entropy: 7.95, // high entropy, and size > 1024
+            },
+        ];
+
+        let warnings = detect_section_anomalies(&sections);
+        assert_eq!(warnings.len(), 3);
+        assert!(warnings[0].contains("UPX0"));
+        assert!(warnings[1].contains(".aspack"));
+        assert!(warnings[2].contains(".data"));
+    }
 }
+

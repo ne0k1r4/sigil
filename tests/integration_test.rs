@@ -134,6 +134,14 @@ mod analyzer_elf {
         let has_ep = info.headers.iter().any(|(k, _)| k == "Entry Point");
         assert!(has_ep, "expected 'Entry Point' in ELF headers");
     }
+
+    #[test]
+    fn elf_program_headers_parsed() {
+        let (info, _) = analyze(&fixture("minimal.elf"), false).unwrap();
+        assert!(!info.elf_segments.is_empty(), "expected program headers");
+        let has_load = info.elf_segments.iter().any(|s| s.segment_type == "LOAD");
+        assert!(has_load, "expected at least one LOAD segment");
+    }
 }
 
 // ── entropy / packing ─────────────────────────────────────────────────────────
