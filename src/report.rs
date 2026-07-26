@@ -76,6 +76,39 @@ pub fn generate_html(
         )
     };
 
+    // sus sections / packer alert warnings
+    let warnings_section: String = if info.section_warnings.is_empty() {
+        String::new()
+    } else {
+        let rows: String = info.section_warnings.iter()
+            .map(|w| format!("<tr class=\"warn\"><td style=\"color:#f85149\">⚠️ {}</td></tr>", e(w)))
+            .collect();
+        format!(
+            "<h2>Section Anomalies / Warnings ({count})</h2>\n\
+             <table><tbody>{rows}</tbody></table>",
+            count = info.section_warnings.len(),
+            rows = rows
+        )
+    };
+
+    // elf segment layout / program headers
+    let segments_section: String = if info.elf_segments.is_empty() {
+        String::new()
+    } else {
+        let rows: String = info.elf_segments.iter()
+            .map(|s| format!(
+                "<tr><td>{}</td><td>{}</td><td>0x{:016x}</td><td>{}</td><td>{}</td></tr>",
+                e(&s.segment_type), e(&s.flags), s.vaddr, s.memsz, s.filesz
+            ))
+            .collect();
+        format!(
+            "<h2>ELF Program Headers ({count})</h2>\n\
+             <table><thead><tr><th>Type</th><th>Flags</th><th>VirtAddr</th><th>MemSize</th><th>FileSize</th></tr></thead><tbody>{rows}</tbody></table>",
+            count = info.elf_segments.len(),
+            rows = rows
+        )
+    };
+
     let rich_section: String = match &info.rich_header {
         Some(rh) => {
             let rows: String = rh.entries.iter()
@@ -276,6 +309,10 @@ pub fn generate_html(
 <h2>Sections</h2>
 <table><thead><tr><th>Name</th><th>Size</th><th>Entropy</th></tr></thead><tbody>{sections_rows}</tbody></table>
 
+{warnings_section}
+
+{segments_section}
+
 <h2>TLS Callbacks</h2>
 <table><tbody>{tls_rows}</tbody></table>
 
@@ -316,6 +353,8 @@ pub fn generate_html(
         entropy = info.entropy,
         hints_rows = hints_rows,
         sections_rows = sections_rows,
+        warnings_section = warnings_section,
+        segments_section = segments_section,
         tls_rows = tls_rows,
         init_handlers_section = init_handlers_section,
         ad_count = ad_hits.len(),
