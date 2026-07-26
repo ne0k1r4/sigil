@@ -36,6 +36,8 @@ pub struct BinaryInfo {
     pub clr: Option<crate::clr::ClrInfo>,
     /// ELF-only: parsed .init_array / .preinit_array initialization constructors
     pub elf_init_handlers: Vec<u64>,
+    // PE-only: debug pdb path if they didn't strip it
+    pub pdb_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -734,6 +736,16 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         headers.push(("Managed (.NET)".into(), "NO".into()));
     }
 
+    // yo, parse the debug dir to grab the pdb path. it's kinda hidden but super useful
+    let pdb_path = pe.debug_data.as_ref().and_then(|dd| {
+        dd.codeview_pdb70_debug_info.as_ref().map(|pdb| {
+            String::from_utf8_lossy(pdb.filename).trim_matches('\0').to_string()
+        })
+    });
+    if let Some(ref path) = pdb_path {
+        headers.push(("PDB Path".into(), path.clone()));
+    }
+
     let sections: Vec<SectionInfo> = pe
         .sections
         .iter()
@@ -770,6 +782,7 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         icon_hashes,
         clr,
         elf_init_handlers: vec![],
+        pdb_path,
     })
 }
 
@@ -921,6 +934,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         icon_hashes: vec![],
         clr: None,
         elf_init_handlers,
+        pdb_path: None,
     })
 }
 
