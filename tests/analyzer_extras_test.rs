@@ -1,6 +1,5 @@
 /// Tests for the new analysis features: Rich header parsing and TLS
 /// callback enumeration (analyzer.rs additions).
-
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
@@ -49,14 +48,20 @@ mod rich_header {
 
         let mut p = 0x80usize;
         // DanS marker
-        write_u32(&mut data, p, 0x536E_6144 ^ key); p += 4;
+        write_u32(&mut data, p, 0x536E_6144 ^ key);
+        p += 4;
         // 3 padding dwords
-        for _ in 0..3 { write_u32(&mut data, p, 0 ^ key); p += 4; }
+        for _ in 0..3 {
+            write_u32(&mut data, p, key);
+            p += 4;
+        }
         // One entry: comp_id=0x00010002, count=5
-        write_u32(&mut data, p, 0x0001_0002 ^ key); p += 4;
-        write_u32(&mut data, p, 5 ^ key); p += 4;
+        write_u32(&mut data, p, 0x0001_0002 ^ key);
+        p += 4;
+        write_u32(&mut data, p, 5 ^ key);
+        p += 4;
         // "Rich" + key
-        data[p..p+4].copy_from_slice(b"Rich");
+        data[p..p + 4].copy_from_slice(b"Rich");
         write_u32(&mut data, p + 4, key);
         let _rich_end = p + 8;
 
@@ -72,7 +77,7 @@ mod rich_header {
     }
 
     fn write_u32(buf: &mut [u8], off: usize, v: u32) {
-        buf[off..off+4].copy_from_slice(&v.to_le_bytes());
+        buf[off..off + 4].copy_from_slice(&v.to_le_bytes());
     }
 }
 
@@ -81,8 +86,8 @@ mod rich_header {
 #[cfg(test)]
 mod tls_callbacks {
     use super::*;
-    use sigil::analyzer::{analyze, parse_tls_callbacks, read_file};
     use goblin::Object;
+    use sigil::analyzer::{analyze, parse_tls_callbacks, read_file};
 
     #[test]
     fn minimal_pe_has_no_tls_callbacks() {
@@ -99,7 +104,10 @@ mod tls_callbacks {
         };
         let lfanew = pe.header.dos_header.pe_pointer;
         let cbs = parse_tls_callbacks(&data, lfanew, pe.image_base as u64, &pe.sections);
-        assert!(cbs.is_empty(), "minimal PE has no TLS directory — expected no callbacks");
+        assert!(
+            cbs.is_empty(),
+            "minimal PE has no TLS directory — expected no callbacks"
+        );
     }
 
     #[test]
@@ -109,4 +117,3 @@ mod tls_callbacks {
         assert!(cbs.is_empty());
     }
 }
-

@@ -9,15 +9,19 @@ mod sigs;
 mod yara_scan;
 
 use analyzer::{
-    analyze, categorize_strings, code_section_from_bytes, extract_strings,
-    import_tuples, packing_hints_from_bytes, packing_verdict, pattern_search,
+    analyze, categorize_strings, code_section_from_bytes, extract_strings, import_tuples,
+    packing_hints_from_bytes, packing_verdict, pattern_search,
 };
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 
 #[derive(Parser)]
-#[command(name = "sigil", about = "Static PE/ELF binary analyzer", version = "0.3.1")]
+#[command(
+    name = "sigil",
+    about = "Static PE/ELF binary analyzer",
+    version = env!("CARGO_PKG_VERSION")
+)]
 struct Cli {
     /// Suppress banner and decorative output (safe for piping / scripting)
     #[arg(long, global = true)]
@@ -42,69 +46,135 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Full static analysis
-    Scan   { path: String, #[arg(long)] json: bool },
+    Scan {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Show file headers and sections
-    Headers { path: String, #[arg(long)] json: bool },
+    Headers {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Extract and categorize printable strings
     Strings {
         path: String,
-        #[arg(short, long, default_value_t = 4)] min_len: usize,
-        #[arg(short, long)] categorize: bool,
-        #[arg(long)] json: bool,
+        #[arg(short, long, default_value_t = 4)]
+        min_len: usize,
+        #[arg(short, long)]
+        categorize: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Show import table
-    Imports { path: String, #[arg(long)] json: bool },
+    Imports {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Show exports and symbols
-    Symbols { path: String, #[arg(long)] json: bool },
+    Symbols {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Show TLS callbacks (anti-cheat execution vectors)
-    Tls     { path: String, #[arg(long)] json: bool },
+    Tls {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Compute MD5 / SHA-256 / imphash
-    Hashes  { path: String, #[arg(long)] json: bool },
+    Hashes {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Entropy + packing analysis
-    Entropy { path: String, #[arg(long)] json: bool },
+    Entropy {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Anti-debug technique detection
-    Antidebug { path: String, #[arg(long)] json: bool },
+    Antidebug {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Anti-cheat engine detection
-    Anticheat { path: String, #[arg(long)] json: bool },
+    Anticheat {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Disassemble code section entry bytes
     Disasm {
         path: String,
-        #[arg(short, long, default_value_t = 64)] count: usize,
-        #[arg(long)] json: bool,
+        #[arg(short, long, default_value_t = 64)]
+        count: usize,
+        #[arg(long)]
+        json: bool,
     },
     /// Search for a hex byte pattern (supports ?? wildcards)
     Pattern {
         path: String,
-        #[arg(short = 'p', long)] hex: String,
-        #[arg(long)] json: bool,
+        #[arg(short = 'p', long)]
+        hex: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Diff two binaries (imports / sections / hashes)
-    Diff { a: String, b: String, #[arg(long)] json: bool },
-    /// Export full report (HTML or JSON)
+    Diff {
+        a: String,
+        b: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export a full HTML or versioned JSON report
     Report {
         path: String,
-        #[arg(long)] html: bool,
-        #[arg(short, long)] output: Option<String>,
+        #[arg(long)]
+        html: bool,
+        /// Write the report to a new file instead of standard output
+        #[arg(short, long)]
+        output: Option<String>,
     },
     /// Scan all files in a directory and summarise anti-debug/anti-cheat hits
     Batch {
         dir: String,
         /// Recurse into subdirectories
-        #[arg(short, long)] recursive: bool,
-        #[arg(long)] json: bool,
+        #[arg(short, long)]
+        recursive: bool,
+        /// Return a non-zero exit status if one or more files cannot be analyzed
+        #[arg(long)]
+        fail_on_error: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Show or extract trailing data appended after the last PE section
     Overlay {
         path: String,
         /// Write the overlay bytes to this file
-        #[arg(short, long)] output: Option<String>,
-        #[arg(long)] json: bool,
+        #[arg(short, long)]
+        output: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Show PE resource info: VS_VERSIONINFO fields and icon hashes
-    Resources { path: String, #[arg(long)] json: bool },
+    Resources {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Show .NET / CLR assembly metadata (assembly name, version, MVID,
     /// type list, obfuscator hints, C# cheat pattern hits)
-    Clr { path: String, #[arg(long)] json: bool },
+    Clr {
+        path: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Disassemble ALL executable sections (full binary disassembly)
     FullDisasm {
         path: String,
@@ -117,7 +187,8 @@ enum Commands {
         /// Show call targets (CALL xref summary)
         #[arg(long)]
         calls: bool,
-        #[arg(long)] json: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Scan binary with YARA rules
     Yara {
@@ -125,14 +196,15 @@ enum Commands {
         /// YARA rule file(s) or directory containing .yar/.yara files
         #[arg(short = 'r', long, required = true, num_args = 1..)]
         rules: Vec<String>,
-        #[arg(long)] json: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
 fn main() {
     let cli = Cli::parse();
     let quiet = cli.quiet;
-    let nsl   = cli.no_size_limit;
+    let nsl = cli.no_size_limit;
 
     let user_cfg = config::load_user_config();
     let custom_rules = match &cli.rules {
@@ -168,11 +240,29 @@ fn main() {
         None => None,
     };
 
-    if let Err(e) = run(cli.command, quiet, nsl, &user_cfg, custom_rules.as_ref(), &imphash_db, ext_sigs.as_ref()) {
+    if let Err(e) = run(
+        cli.command,
+        quiet,
+        nsl,
+        &user_cfg,
+        custom_rules.as_ref(),
+        &imphash_db,
+        ext_sigs.as_ref(),
+    ) {
         // All errors go to stderr; never pollute stdout (breaks --json pipelines)
         eprintln!("{} {:#}", "error:".red().bold(), e);
         std::process::exit(1);
     }
+}
+
+fn ensure_output_path_is_new(path: &str) -> Result<()> {
+    if std::path::Path::new(path).exists() {
+        anyhow::bail!(
+            "output file '{}' already exists — choose a different path or remove the existing file",
+            path
+        );
+    }
+    Ok(())
 }
 
 fn run(
@@ -188,56 +278,95 @@ fn run(
         Commands::Scan { path, json } => {
             let (info, data) = analyze(&path, nsl)?;
             let tuples = import_tuples(&info);
-            let ad     = sigs::scan_antidebug_with_config(
-                &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings, ext_sigs);
-            let ac     = sigs::scan_anticheat_with_config(
-                &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings, ext_sigs);
-            let hints  = packing_hints_from_bytes(&data).unwrap_or_default();
+            let ad = sigs::scan_antidebug_with_config(
+                &tuples,
+                &info.strings,
+                &user_cfg.antidebug_imports,
+                &user_cfg.antidebug_strings,
+                ext_sigs,
+            );
+            let ac = sigs::scan_anticheat_with_config(
+                &tuples,
+                &info.strings,
+                &user_cfg.anticheat_imports,
+                &user_cfg.anticheat_strings,
+                ext_sigs,
+            );
+            let hints = packing_hints_from_bytes(&data).unwrap_or_default();
             let custom_hits = custom_rules
                 .map(|r| rules::scan_rules(r, &data, &info.strings))
                 .unwrap_or_default();
             let h = hashes::from_bytes(&data);
-            let imphash_match = h.imphash.as_deref()
+            let imphash_match = h
+                .imphash
+                .as_deref()
                 .and_then(|hash| sigs::check_imphash(hash, &user_cfg.known_imphashes));
-            let imphash_db_match = h.imphash.as_deref()
+            let imphash_db_match = h
+                .imphash
+                .as_deref()
                 .and_then(|hash| sigs::check_imphash_db(hash, imphash_db));
 
             if json {
-                let mut obj = serde_json::to_value(&info)?;
-                obj["antidebug"]     = serde_json::to_value(&ad)?;
-                obj["anticheat"]     = serde_json::to_value(&ac)?;
-                obj["packing_hints"] = serde_json::to_value(&hints)?;
-                obj["custom_rule_hits"] = serde_json::to_value(&custom_hits)?;
-                obj["hashes"]        = serde_json::to_value(&h)?;
-                obj["imphash_match"] = serde_json::to_value(&imphash_match)?;
-                obj["imphash_db_match"] = serde_json::to_value(&imphash_db_match)?;
-                println!("{}", serde_json::to_string_pretty(&obj)?);
+                println!(
+                    "{}",
+                    report::generate_json(report::JsonReport {
+                        info: &info,
+                        ad_hits: &ad,
+                        ac_hits: &ac,
+                        packing_hints: &hints,
+                        hashes: &h,
+                        custom_hits: &custom_hits,
+                        imphash_match: imphash_match.as_deref(),
+                        imphash_db_match: imphash_db_match.as_deref(),
+                    })?
+                );
             } else {
-                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                if !quiet {
+                    print_banner(&info.path, &info.format, &info.arch);
+                }
                 print_headers(&info.headers);
                 print_entropy_summary(info.entropy, &info.sections);
                 print_imports_summary(&info.imports);
                 print_strings_summary(&info.strings);
                 if !info.exports.is_empty() {
-                    println!("\n{} {} exports", "Exports:".bold().cyan(), info.exports.len());
+                    println!(
+                        "\n{} {} exports",
+                        "Exports:".bold().cyan(),
+                        info.exports.len()
+                    );
                 }
                 if !info.tls_callbacks.is_empty() {
                     println!("\n{}", "TLS Callbacks:".bold().red());
-                    for t in &info.tls_callbacks { println!("  {} {}", "⚑".red(), t); }
+                    for t in &info.tls_callbacks {
+                        println!("  {} {}", "⚑".red(), t);
+                    }
                 }
                 // rich header — compiler/linker toolchain fingerprint from MSVC PE stubs
                 if let Some(rh) = &info.rich_header {
                     println!("\n{}", "Rich Header:".bold().cyan());
                     println!("{}", "─".repeat(60).dimmed());
                     println!("  {:<22} {}", "Hash:".dimmed(), rh.hash.yellow());
-                    println!("  {:<12} {:<12} {:<12} {}", "CompID".dimmed(), "ProdID".dimmed(), "Build".dimmed(), "Count".dimmed());
+                    println!(
+                        "  {:<12} {:<12} {:<12} {}",
+                        "CompID".dimmed(),
+                        "ProdID".dimmed(),
+                        "Build".dimmed(),
+                        "Count".dimmed()
+                    );
                     for en in &rh.entries {
-                        println!("  0x{:08x}   {:<12} {:<12} {}", en.comp_id, en.product_id, en.build_number, en.count);
+                        println!(
+                            "  0x{:08x}   {:<12} {:<12} {}",
+                            en.comp_id, en.product_id, en.build_number, en.count
+                        );
                     }
                 }
                 // elf init handlers — constructors from .init_array/.preinit_array
                 if !info.elf_init_handlers.is_empty() {
-                    println!("\n{} {} handler(s)", "ELF Init Array:".bold().yellow(), info.elf_init_handlers.len());
+                    println!(
+                        "\n{} {} handler(s)",
+                        "ELF Init Array:".bold().yellow(),
+                        info.elf_init_handlers.len()
+                    );
                     println!("{}", "─".repeat(60).dimmed());
                     for addr in &info.elf_init_handlers {
                         println!("  {} 0x{:016x}", "▸".yellow(), addr);
@@ -245,11 +374,25 @@ fn run(
                 }
                 // elf segments — program headers memory layout
                 if !info.elf_segments.is_empty() {
-                    println!("\n{} {} segment(s)", "ELF Program Headers:".bold().cyan(), info.elf_segments.len());
+                    println!(
+                        "\n{} {} segment(s)",
+                        "ELF Program Headers:".bold().cyan(),
+                        info.elf_segments.len()
+                    );
                     println!("{}", "─".repeat(60).dimmed());
-                    println!("  {:<16} {:<8} {:<18} {:<12} {}", "Type".dimmed(), "Flags".dimmed(), "VirtAddr".dimmed(), "MemSize".dimmed(), "FileSize".dimmed());
+                    println!(
+                        "  {:<16} {:<8} {:<18} {:<12} {}",
+                        "Type".dimmed(),
+                        "Flags".dimmed(),
+                        "VirtAddr".dimmed(),
+                        "MemSize".dimmed(),
+                        "FileSize".dimmed()
+                    );
                     for s in &info.elf_segments {
-                        println!("  {:<16} {:<8} 0x{:016x} {:<12} {}", s.segment_type, s.flags, s.vaddr, s.memsz, s.filesz);
+                        println!(
+                            "  {:<16} {:<8} 0x{:016x} {:<12} {}",
+                            s.segment_type, s.flags, s.vaddr, s.memsz, s.filesz
+                        );
                     }
                 }
                 // section warnings — suspicious names / high entropy packer checks
@@ -262,8 +405,10 @@ fn run(
                 }
                 if let Some(auth) = &info.authenticode {
                     println!("\n{}", "Authenticode:".bold().cyan());
-                    println!("  cert type {} / revision 0x{:04x} / {} bytes",
-                        auth.cert_type, auth.cert_revision, auth.size);
+                    println!(
+                        "  cert type {} / revision 0x{:04x} / {} bytes",
+                        auth.cert_type, auth.cert_revision, auth.size
+                    );
                     if !auth.candidate_identities.is_empty() {
                         println!("  candidate identities (from cert blob, unverified):");
                         for s in auth.candidate_identities.iter().take(10) {
@@ -272,8 +417,14 @@ fn run(
                     }
                 }
                 if !info.icon_hashes.is_empty() {
-                    println!("\n{} {} icon resource(s)", "Icons:".bold().cyan(), info.icon_hashes.len());
-                    for h in &info.icon_hashes { println!("  sha256 {}", h.dimmed()); }
+                    println!(
+                        "\n{} {} icon resource(s)",
+                        "Icons:".bold().cyan(),
+                        info.icon_hashes.len()
+                    );
+                    for h in &info.icon_hashes {
+                        println!("  sha256 {}", h.dimmed());
+                    }
                 }
                 if let Some(desc) = &imphash_match {
                     println!("\n{}", "Imphash Match:".bold().red());
@@ -287,7 +438,11 @@ fn run(
                     println!("\n{}", "Detections:".bold().cyan());
                     println!("{}", "─".repeat(60).dimmed());
                     for h in ad.iter().chain(ac.iter()) {
-                        let tag = if h.category == "anti-debug" { "[AD]".red() } else { "[AC]".magenta() };
+                        let tag = if h.category == "anti-debug" {
+                            "[AD]".red()
+                        } else {
+                            "[AC]".magenta()
+                        };
                         println!("  {} {} — {}", tag, h.technique.bold(), h.matched.dimmed());
                     }
                 }
@@ -295,27 +450,55 @@ fn run(
                     println!("\n{}", "Custom Rule Hits:".bold().cyan());
                     println!("{}", "─".repeat(60).dimmed());
                     for h in &custom_hits {
-                        println!("  {} {} [{}] — {}", "⚑".blue(), h.technique.bold(), h.category.dimmed(), h.matched.dimmed());
+                        println!(
+                            "  {} {} [{}] — {}",
+                            "⚑".blue(),
+                            h.technique.bold(),
+                            h.category.dimmed(),
+                            h.matched.dimmed()
+                        );
                     }
                 }
                 if let Some(ci) = &info.clr {
                     println!("\n{}", "CLR / .NET:".bold().cyan());
                     println!("{}", "─".repeat(60).dimmed());
-                    println!("  {:<22} {}", "Assembly:".dimmed(),
-                        ci.assembly_name.as_deref().unwrap_or("?").yellow());
-                    println!("  {:<22} {}", "Version:".dimmed(),
-                        ci.assembly_version.as_deref().unwrap_or("?"));
+                    println!(
+                        "  {:<22} {}",
+                        "Assembly:".dimmed(),
+                        ci.assembly_name.as_deref().unwrap_or("?").yellow()
+                    );
+                    println!(
+                        "  {:<22} {}",
+                        "Version:".dimmed(),
+                        ci.assembly_version.as_deref().unwrap_or("?")
+                    );
                     println!("  {:<22} {}", "Runtime:".dimmed(), ci.runtime_version);
-                    println!("  {:<22} {}", "Flags:".dimmed(), ci.clr_flags_desc.join(", "));
+                    println!(
+                        "  {:<22} {}",
+                        "Flags:".dimmed(),
+                        ci.clr_flags_desc.join(", ")
+                    );
                     if !ci.obfuscator_hints.is_empty() {
-                        println!("  {:<22} {} hint(s)", "Obfuscator:".yellow(),
-                            ci.obfuscator_hints.len());
+                        println!(
+                            "  {:<22} {} hint(s)",
+                            "Obfuscator:".yellow(),
+                            ci.obfuscator_hints.len()
+                        );
                     }
                     if !ci.cheat_pattern_hits.is_empty() {
-                        println!("  {} {} C# cheat pattern hit(s) — run `sigil clr {}` for detail",
-                            "⚑".red(), ci.cheat_pattern_hits.len(), info.path);
+                        println!(
+                            "  {} {} C# cheat pattern hit(s) — run `sigil clr {}` for detail",
+                            "⚑".red(),
+                            ci.cheat_pattern_hits.len(),
+                            info.path
+                        );
                         for hit in ci.cheat_pattern_hits.iter().take(5) {
-                            println!("    {} {} — {}", "⚑".red(), hit.matched.bold(), hit.description.dimmed());
+                            println!(
+                                "    {} {} — {}",
+                                "⚑".red(),
+                                hit.matched.bold(),
+                                hit.description.dimmed()
+                            );
                         }
                     }
                 }
@@ -325,8 +508,9 @@ fn run(
         Commands::Headers { path, json } => {
             let (info, _) = analyze(&path, nsl)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(
-                    &serde_json::json!({
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
                         "headers": info.headers,
                         "sections": info.sections,
                         "rich_header": info.rich_header,
@@ -334,46 +518,70 @@ fn run(
                         "authenticode": info.authenticode,
                         "version_info": info.version_info,
                         "icon_hashes": info.icon_hashes,
-                    })
-                )?);
+                    }))?
+                );
             } else {
-                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                if !quiet {
+                    print_banner(&info.path, &info.format, &info.arch);
+                }
                 print_headers(&info.headers);
                 println!("\n{}", "Sections:".bold().cyan());
-                println!("{:<24} {:>10} {:>10}", "Name".dimmed(), "Size".dimmed(), "Entropy".dimmed());
+                println!(
+                    "{:<24} {:>10} {:>10}",
+                    "Name".dimmed(),
+                    "Size".dimmed(),
+                    "Entropy".dimmed()
+                );
                 println!("{}", "─".repeat(48).dimmed());
                 for s in &info.sections {
                     let ent = format!("{:.3}", s.entropy);
-                    let ec  = entropy_color(s.entropy, &ent);
+                    let ec = entropy_color(s.entropy, &ent);
                     println!("{:<24} {:>10} {:>10}", s.name, s.size, ec);
                 }
             }
         }
 
-        Commands::Strings { path, min_len, categorize, json } => {
-            let data    = analyzer::read_file(&path, nsl)?;
+        Commands::Strings {
+            path,
+            min_len,
+            categorize,
+            json,
+        } => {
+            let data = analyzer::read_file(&path, nsl)?;
             let strings = extract_strings(&data, min_len);
             if json {
                 if categorize {
-                    println!("{}", serde_json::to_string_pretty(&categorize_strings(&strings))?);
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&categorize_strings(&strings))?
+                    );
                 } else {
                     println!("{}", serde_json::to_string_pretty(&strings)?);
                 }
             } else if categorize {
                 let cats = categorize_strings(&strings);
-                if !quiet { println!("{}", "Categorized Strings:".bold().cyan()); }
-                print_cat_section("URLs",     &cats.urls);
-                print_cat_section("IPs",      &cats.ips);
+                if !quiet {
+                    println!("{}", "Categorized Strings:".bold().cyan());
+                }
+                print_cat_section("URLs", &cats.urls);
+                print_cat_section("IPs", &cats.ips);
                 print_cat_section("Registry", &cats.registry);
-                print_cat_section("Paths",    &cats.paths);
-                print_cat_section("GUIDs",    &cats.guids);
+                print_cat_section("Paths", &cats.paths);
+                print_cat_section("GUIDs", &cats.guids);
                 println!("\n{} {} other strings", "Other:".dimmed(), cats.other.len());
             } else {
                 if !quiet {
-                    println!("{} {} strings from {}", ">>".cyan(), strings.len(), path.yellow());
+                    println!(
+                        "{} {} strings from {}",
+                        ">>".cyan(),
+                        strings.len(),
+                        path.yellow()
+                    );
                     println!("{}", "─".repeat(60).dimmed());
                 }
-                for s in &strings { println!("{}", s); }
+                for s in &strings {
+                    println!("{}", s);
+                }
             }
         }
 
@@ -382,7 +590,9 @@ fn run(
             if json {
                 println!("{}", serde_json::to_string_pretty(&info.imports)?);
             } else {
-                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                if !quiet {
+                    print_banner(&info.path, &info.format, &info.arch);
+                }
                 if info.imports.is_empty() {
                     println!("{}", "No imports found.".yellow());
                     return Ok(());
@@ -402,13 +612,22 @@ fn run(
         Commands::Symbols { path, json } => {
             let (info, _) = analyze(&path, nsl)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(
-                    &serde_json::json!({ "exports": info.exports, "symbols": info.symbols })
-                )?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &serde_json::json!({ "exports": info.exports, "symbols": info.symbols })
+                    )?
+                );
             } else {
-                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                if !quiet {
+                    print_banner(&info.path, &info.format, &info.arch);
+                }
                 if !info.exports.is_empty() {
-                    println!("\n{} {} exports", "Exports:".bold().cyan(), info.exports.len());
+                    println!(
+                        "\n{} {} exports",
+                        "Exports:".bold().cyan(),
+                        info.exports.len()
+                    );
                     println!("{}", "─".repeat(48).dimmed());
                     for e in &info.exports {
                         let ord = e.ordinal.map(|o| format!(" #{}", o)).unwrap_or_default();
@@ -416,10 +635,19 @@ fn run(
                     }
                 }
                 if !info.symbols.is_empty() {
-                    println!("\n{} {} symbols", "Symbols:".bold().cyan(), info.symbols.len());
+                    println!(
+                        "\n{} {} symbols",
+                        "Symbols:".bold().cyan(),
+                        info.symbols.len()
+                    );
                     println!("{}", "─".repeat(48).dimmed());
                     for sym in info.symbols.iter().take(200) {
-                        println!("  {:016x}  {:<8} {}", sym.address, sym.kind.dimmed(), sym.name.green());
+                        println!(
+                            "  {:016x}  {:<8} {}",
+                            sym.address,
+                            sym.kind.dimmed(),
+                            sym.name.green()
+                        );
                     }
                     if info.symbols.len() > 200 {
                         println!("  ... {} more (use --json)", info.symbols.len() - 200);
@@ -436,22 +664,30 @@ fn run(
             if json {
                 println!("{}", serde_json::to_string_pretty(&info.tls_callbacks)?);
             } else {
-                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                if !quiet {
+                    print_banner(&info.path, &info.format, &info.arch);
+                }
                 println!("\n{}", "TLS Callbacks:".bold().red());
                 println!("{}", "─".repeat(48).dimmed());
                 if info.tls_callbacks.is_empty() {
                     println!("  {}", "No TLS callbacks found.".green());
                 } else {
-                    for t in &info.tls_callbacks { println!("  {} {}", "⚑".red(), t); }
+                    for t in &info.tls_callbacks {
+                        println!("  {} {}", "⚑".red(), t);
+                    }
                 }
             }
         }
 
         Commands::Hashes { path, json } => {
             let h = hashes::compute(&path, nsl)?;
-            let imphash_match = h.imphash.as_deref()
+            let imphash_match = h
+                .imphash
+                .as_deref()
                 .and_then(|hash| sigs::check_imphash(hash, &user_cfg.known_imphashes));
-            let imphash_db_match = h.imphash.as_deref()
+            let imphash_db_match = h
+                .imphash
+                .as_deref()
                 .and_then(|hash| sigs::check_imphash_db(hash, imphash_db));
             if json {
                 let mut obj = serde_json::to_value(&h)?;
@@ -463,7 +699,7 @@ fn run(
                     println!("\n{}", "Hashes:".bold().cyan());
                     println!("{}", "─".repeat(72).dimmed());
                 }
-                println!("  {:<10} {}", "MD5".dimmed(),     h.md5.yellow());
+                println!("  {:<10} {}", "MD5".dimmed(), h.md5.yellow());
                 println!("  {:<10} {}", "SHA-256".dimmed(), h.sha256.yellow());
                 if let Some(imp) = &h.imphash {
                     println!("  {:<10} {}", "imphash".dimmed(), imp.yellow());
@@ -483,36 +719,50 @@ fn run(
             let (info, data) = analyze(&path, nsl)?;
             let hints = packing_hints_from_bytes(&data).unwrap_or_default();
             if json {
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "overall":  info.entropy,
-                    "verdict":  packing_verdict(info.entropy),
-                    "hints":    hints,
-                    "sections": info.sections,
-                }))?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "overall":  info.entropy,
+                        "verdict":  packing_verdict(info.entropy),
+                        "hints":    hints,
+                        "sections": info.sections,
+                    }))?
+                );
             } else {
-                if !quiet { print_banner(&path, &info.format, &info.arch); }
+                if !quiet {
+                    print_banner(&path, &info.format, &info.arch);
+                }
                 println!("\n{}", "Entropy Analysis:".bold().cyan());
                 println!("{}", "─".repeat(44).dimmed());
                 println!("  Overall: {:.4} / 8.0", info.entropy);
                 let verdict = packing_verdict(info.entropy);
                 let vc = match verdict {
                     "LIKELY PACKED/ENCRYPTED" => verdict.red().bold(),
-                    "SUSPICIOUS"              => verdict.yellow().bold(),
-                    _                         => verdict.green().bold(),
+                    "SUSPICIOUS" => verdict.yellow().bold(),
+                    _ => verdict.green().bold(),
                 };
                 println!("  Verdict: {}", vc);
                 println!("\n{}", "Packing Hints:".bold().cyan());
                 println!("{}", "─".repeat(44).dimmed());
                 for h in &hints {
-                    let icon = if h.starts_with("No packing") { "✓".green() } else { "⚠".yellow() };
+                    let icon = if h.starts_with("No packing") {
+                        "✓".green()
+                    } else {
+                        "⚠".yellow()
+                    };
                     println!("  {} {}", icon, h);
                 }
                 println!("\n{}", "Per-section entropy:".bold().cyan());
-                println!("{:<24} {:>10} {:>10}", "Section".dimmed(), "Size".dimmed(), "Entropy".dimmed());
+                println!(
+                    "{:<24} {:>10} {:>10}",
+                    "Section".dimmed(),
+                    "Size".dimmed(),
+                    "Entropy".dimmed()
+                );
                 println!("{}", "─".repeat(48).dimmed());
                 for s in &info.sections {
                     let ent = format!("{:.3}", s.entropy);
-                    let ec  = entropy_color(s.entropy, &ent);
+                    let ec = entropy_color(s.entropy, &ent);
                     println!("{:<24} {:>10} {:>10}", s.name, s.size, ec);
                 }
             }
@@ -521,12 +771,18 @@ fn run(
         Commands::Antidebug { path, json } => {
             let (info, _) = analyze(&path, nsl)?;
             let hits = sigs::scan_antidebug_with_config(
-                &import_tuples(&info), &info.strings,
-                &user_cfg.antidebug_imports, &user_cfg.antidebug_strings, ext_sigs);
+                &import_tuples(&info),
+                &info.strings,
+                &user_cfg.antidebug_imports,
+                &user_cfg.antidebug_strings,
+                ext_sigs,
+            );
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
-                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                if !quiet {
+                    print_banner(&info.path, &info.format, &info.arch);
+                }
                 println!("\n{} anti-debug scan — {} hits\n", "◈".red(), hits.len());
                 println!("{}", "─".repeat(60).dimmed());
                 if hits.is_empty() {
@@ -543,13 +799,23 @@ fn run(
         Commands::Anticheat { path, json } => {
             let (info, _) = analyze(&path, nsl)?;
             let hits = sigs::scan_anticheat_with_config(
-                &import_tuples(&info), &info.strings,
-                &user_cfg.anticheat_imports, &user_cfg.anticheat_strings, ext_sigs);
+                &import_tuples(&info),
+                &info.strings,
+                &user_cfg.anticheat_imports,
+                &user_cfg.anticheat_strings,
+                ext_sigs,
+            );
             if json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
-                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
-                println!("\n{} anti-cheat scan — {} hits\n", "◈".magenta(), hits.len());
+                if !quiet {
+                    print_banner(&info.path, &info.format, &info.arch);
+                }
+                println!(
+                    "\n{} anti-cheat scan — {} hits\n",
+                    "◈".magenta(),
+                    hits.len()
+                );
                 println!("{}", "─".repeat(60).dimmed());
                 if hits.is_empty() {
                     println!("  {}", "No anti-cheat indicators detected.".green());
@@ -565,17 +831,29 @@ fn run(
         Commands::Disasm { path, count, json } => {
             let (info, data) = analyze(&path, nsl)?;
             let (off, sz, base, is64) = code_section_from_bytes(&data)?;
-            let code  = data.get(off..off + sz).unwrap_or(&[]);
+            let code = data.get(off..off + sz).unwrap_or(&[]);
             let insns = disasm::disassemble(code, base, is64, count)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&insns)?);
             } else {
-                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
-                println!("\n{} {} instructions from 0x{:x}\n", "◈ disasm".cyan().bold(), insns.len(), base);
+                if !quiet {
+                    print_banner(&info.path, &info.format, &info.arch);
+                }
+                println!(
+                    "\n{} {} instructions from 0x{:x}\n",
+                    "◈ disasm".cyan().bold(),
+                    insns.len(),
+                    base
+                );
                 println!("{}", "─".repeat(70).dimmed());
                 for i in &insns {
-                    println!("  {:016x}  {:<32} {} {}",
-                        i.addr, i.bytes.dimmed(), i.mnemonic.yellow().bold(), i.op_str.white());
+                    println!(
+                        "  {:016x}  {:<32} {} {}",
+                        i.addr,
+                        i.bytes.dimmed(),
+                        i.mnemonic.yellow().bold(),
+                        i.op_str.white()
+                    );
                 }
             }
         }
@@ -588,15 +866,24 @@ fn run(
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 if !quiet {
-                    println!("\n{} pattern {} — {} hits in {}",
-                        "◈".cyan(), hex.yellow(), hits.len(), path.yellow());
+                    println!(
+                        "\n{} pattern {} — {} hits in {}",
+                        "◈".cyan(),
+                        hex.yellow(),
+                        hits.len(),
+                        path.yellow()
+                    );
                     println!("{}", "─".repeat(50).dimmed());
                 }
-                for offset in hits.iter().take(200) { println!("  0x{:016x}", offset); }
+                for offset in hits.iter().take(200) {
+                    println!("  0x{:016x}", offset);
+                }
                 if hits.len() > 200 {
                     println!("  ... {} more (use --json for full list)", hits.len() - 200);
                 }
-                if hits.is_empty() { println!("  {}", "No matches.".dimmed()); }
+                if hits.is_empty() {
+                    println!("  {}", "No matches.".dimmed());
+                }
             }
         }
 
@@ -606,10 +893,16 @@ fn run(
             let ha = hashes::compute(&a, nsl)?;
             let hb = hashes::compute(&b, nsl)?;
 
-            let a_imports: std::collections::HashSet<String> =
-                ia.imports.iter().map(|i| format!("{}!{}", i.library, i.function)).collect();
-            let b_imports: std::collections::HashSet<String> =
-                ib.imports.iter().map(|i| format!("{}!{}", i.library, i.function)).collect();
+            let a_imports: std::collections::HashSet<String> = ia
+                .imports
+                .iter()
+                .map(|i| format!("{}!{}", i.library, i.function))
+                .collect();
+            let b_imports: std::collections::HashSet<String> = ib
+                .imports
+                .iter()
+                .map(|i| format!("{}!{}", i.library, i.function))
+                .collect();
             let only_a: Vec<&String> = a_imports.difference(&b_imports).collect();
             let only_b: Vec<&String> = b_imports.difference(&a_imports).collect();
 
@@ -619,12 +912,15 @@ fn run(
                 ib.sections.iter().map(|s| (s.name.as_str(), s)).collect();
 
             if json {
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "a": { "path": a, "md5": ha.md5, "sha256": ha.sha256 },
-                    "b": { "path": b, "md5": hb.md5, "sha256": hb.sha256 },
-                    "imports_only_in_a": only_a,
-                    "imports_only_in_b": only_b,
-                }))?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "a": { "path": a, "md5": ha.md5, "sha256": ha.sha256 },
+                        "b": { "path": b, "md5": hb.md5, "sha256": hb.sha256 },
+                        "imports_only_in_a": only_a,
+                        "imports_only_in_b": only_b,
+                    }))?
+                );
             } else {
                 if !quiet {
                     println!("\n{} diff\n", "◈ sigil".bold().magenta());
@@ -633,17 +929,23 @@ fn run(
                 }
                 println!("\n{}", "Hashes:".bold().cyan());
                 println!("{}", "─".repeat(80).dimmed());
-                println!("  {:<10} A: {}",   "MD5".dimmed(),     ha.md5.yellow());
-                println!("  {:<10} B: {}",   "".dimmed(),         hb.md5.yellow());
+                println!("  {:<10} A: {}", "MD5".dimmed(), ha.md5.yellow());
+                println!("  {:<10} B: {}", "".dimmed(), hb.md5.yellow());
                 println!("  {:<10} A: {}", "SHA-256".dimmed(), ha.sha256.yellow());
-                println!("  {:<10} B: {}", "".dimmed(),          hb.sha256.yellow());
+                println!("  {:<10} B: {}", "".dimmed(), hb.sha256.yellow());
 
                 println!("\n{}", "Import diff:".bold().cyan());
                 println!("{}", "─".repeat(50).dimmed());
-                let mut only_a_s = only_a; only_a_s.sort();
-                let mut only_b_s = only_b; only_b_s.sort();
-                for s in &only_a_s { println!("  {} {}", "-".red(),   s.red()); }
-                for s in &only_b_s { println!("  {} {}", "+".green(), s.green()); }
+                let mut only_a_s = only_a;
+                only_a_s.sort();
+                let mut only_b_s = only_b;
+                only_b_s.sort();
+                for s in &only_a_s {
+                    println!("  {} {}", "-".red(), s.red());
+                }
+                for s in &only_b_s {
+                    println!("  {} {}", "+".green(), s.green());
+                }
                 if only_a_s.is_empty() && only_b_s.is_empty() {
                     println!("  {}", "Identical imports.".dimmed());
                 }
@@ -657,8 +959,15 @@ fn run(
                         (Some(a), Some(b)) => {
                             let delta = b.entropy - a.entropy;
                             let ds = format!("{:+.3}", delta);
-                            let dc = if delta.abs() > 0.5 { ds.yellow() } else { ds.dimmed() };
-                            println!("  {:<20} A:{:.3}  B:{:.3}  Δ{}", name, a.entropy, b.entropy, dc);
+                            let dc = if delta.abs() > 0.5 {
+                                ds.yellow()
+                            } else {
+                                ds.dimmed()
+                            };
+                            println!(
+                                "  {:<20} A:{:.3}  B:{:.3}  Δ{}",
+                                name, a.entropy, b.entropy, dc
+                            );
                         }
                         (Some(_), None) => println!("  {:<20} {}", name, "removed".red()),
                         (None, Some(_)) => println!("  {:<20} {}", name, "added".green()),
@@ -670,49 +979,80 @@ fn run(
 
         Commands::Report { path, html, output } => {
             let (info, data) = analyze(&path, nsl)?;
-            let tuples  = import_tuples(&info);
+            let tuples = import_tuples(&info);
             let ad_hits = sigs::scan_antidebug_with_config(
-                &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings, ext_sigs);
+                &tuples,
+                &info.strings,
+                &user_cfg.antidebug_imports,
+                &user_cfg.antidebug_strings,
+                ext_sigs,
+            );
             let ac_hits = sigs::scan_anticheat_with_config(
-                &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings, ext_sigs);
-            let hints   = packing_hints_from_bytes(&data).unwrap_or_default();
-            let h       = hashes::from_bytes(&data);
+                &tuples,
+                &info.strings,
+                &user_cfg.anticheat_imports,
+                &user_cfg.anticheat_strings,
+                ext_sigs,
+            );
+            let hints = packing_hints_from_bytes(&data).unwrap_or_default();
+            let h = hashes::from_bytes(&data);
             let custom_hits = custom_rules
                 .map(|r| rules::scan_rules(r, &data, &info.strings))
                 .unwrap_or_default();
-            let imphash_match = h.imphash.as_deref()
+            let imphash_match = h
+                .imphash
+                .as_deref()
                 .and_then(|hash| sigs::check_imphash(hash, &user_cfg.known_imphashes));
-            let imphash_db_match = h.imphash.as_deref()
+            let imphash_db_match = h
+                .imphash
+                .as_deref()
                 .and_then(|hash| sigs::check_imphash_db(hash, imphash_db));
 
             if html {
-                let out = output.unwrap_or_else(|| format!("{}.html",
-                    std::path::Path::new(&path).file_name()
-                        .unwrap_or_default().to_string_lossy()));
-                if std::path::Path::new(&out).exists() {
-                    anyhow::bail!(
-                        "output file '{}' already exists — pass -o <path> to choose a different name",
-                        out
-                    );
-                }
+                let out = output.unwrap_or_else(|| {
+                    format!(
+                        "{}.html",
+                        std::path::Path::new(&path)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    )
+                });
+                ensure_output_path_is_new(&out)?;
                 report::generate_html(&info, &ad_hits, &ac_hits, &hints, &h, &out)?;
                 if !quiet {
                     println!("{} HTML report written to {}", ">>".green(), out.yellow());
                 }
             } else {
-                let mut obj = serde_json::to_value(&info)?;
-                obj["antidebug"]     = serde_json::to_value(&ad_hits)?;
-                obj["anticheat"]     = serde_json::to_value(&ac_hits)?;
-                obj["packing_hints"] = serde_json::to_value(&hints)?;
-                obj["hashes"]        = serde_json::to_value(&h)?;
-                obj["custom_rule_hits"] = serde_json::to_value(&custom_hits)?;
-                obj["imphash_match"] = serde_json::to_value(&imphash_match)?;
-                obj["imphash_db_match"] = serde_json::to_value(&imphash_db_match)?;
-                println!("{}", serde_json::to_string_pretty(&obj)?);
+                let json_report = report::generate_json(report::JsonReport {
+                    info: &info,
+                    ad_hits: &ad_hits,
+                    ac_hits: &ac_hits,
+                    packing_hints: &hints,
+                    hashes: &h,
+                    custom_hits: &custom_hits,
+                    imphash_match: imphash_match.as_deref(),
+                    imphash_db_match: imphash_db_match.as_deref(),
+                })?;
+                if let Some(out) = output {
+                    ensure_output_path_is_new(&out)?;
+                    std::fs::write(&out, json_report)
+                        .with_context(|| format!("failed to write '{}'", out))?;
+                    if !quiet {
+                        println!("{} JSON report written to {}", ">>".green(), out.yellow());
+                    }
+                } else {
+                    println!("{}", json_report);
+                }
             }
         }
 
-        Commands::Batch { dir, recursive, json } => {
+        Commands::Batch {
+            dir,
+            recursive,
+            fail_on_error,
+            json,
+        } => {
             let files = collect_files(&dir, recursive)?;
             let total = files.len();
             let mut results = Vec::new();
@@ -729,9 +1069,19 @@ fn run(
                     Ok((info, data)) => {
                         let tuples = import_tuples(&info);
                         let ad = sigs::scan_antidebug_with_config(
-                            &tuples, &info.strings, &user_cfg.antidebug_imports, &user_cfg.antidebug_strings, ext_sigs);
+                            &tuples,
+                            &info.strings,
+                            &user_cfg.antidebug_imports,
+                            &user_cfg.antidebug_strings,
+                            ext_sigs,
+                        );
                         let ac = sigs::scan_anticheat_with_config(
-                            &tuples, &info.strings, &user_cfg.anticheat_imports, &user_cfg.anticheat_strings, ext_sigs);
+                            &tuples,
+                            &info.strings,
+                            &user_cfg.anticheat_imports,
+                            &user_cfg.anticheat_strings,
+                            ext_sigs,
+                        );
                         let h = hashes::from_bytes(&data);
                         let verdict = packing_verdict(info.entropy);
                         results.push(serde_json::json!({
@@ -758,18 +1108,37 @@ fn run(
                 eprintln!("\r{}", " ".repeat(80)); // clear progress line
             }
 
+            let failed = results
+                .iter()
+                .filter(|result| result.get("error").is_some())
+                .count();
+
             if json {
                 println!("{}", serde_json::to_string_pretty(&results)?);
             } else {
                 if !quiet {
-                    println!("\n{} batch scan — {} files\n", "◈ sigil".bold().magenta(), total);
+                    println!(
+                        "\n{} batch scan — {} files\n",
+                        "◈ sigil".bold().magenta(),
+                        total
+                    );
                     println!("{}", "─".repeat(90).dimmed());
                 }
-                println!("{:<40} {:<6} {:<22} {:>3} {:>3}",
-                    "Path".dimmed(), "Fmt".dimmed(), "Verdict".dimmed(), "AD".dimmed(), "AC".dimmed());
+                println!(
+                    "{:<40} {:<6} {:<22} {:>3} {:>3}",
+                    "Path".dimmed(),
+                    "Fmt".dimmed(),
+                    "Verdict".dimmed(),
+                    "AD".dimmed(),
+                    "AC".dimmed()
+                );
                 for r in &results {
                     if let Some(err) = r.get("error").and_then(|v| v.as_str()) {
-                        println!("{:<40} {}", truncate_path(r["path"].as_str().unwrap_or(""), 40), format!("ERROR: {}", err).red());
+                        println!(
+                            "{:<40} {}",
+                            truncate_path(r["path"].as_str().unwrap_or(""), 40),
+                            format!("ERROR: {}", err).red()
+                        );
                         continue;
                     }
                     let path = r["path"].as_str().unwrap_or("");
@@ -779,14 +1148,39 @@ fn run(
                     let ac = r["anticheat_hits"].as_u64().unwrap_or(0);
                     let vc = match verdict {
                         "LIKELY PACKED/ENCRYPTED" => verdict.red(),
-                        "SUSPICIOUS"              => verdict.yellow(),
-                        _                         => verdict.green(),
+                        "SUSPICIOUS" => verdict.yellow(),
+                        _ => verdict.green(),
                     };
-                    let ad_s = if ad > 0 { ad.to_string().red() } else { ad.to_string().dimmed() };
-                    let ac_s = if ac > 0 { ac.to_string().magenta() } else { ac.to_string().dimmed() };
-                    println!("{:<40} {:<6} {:<22} {:>3} {:>3}",
-                        truncate_path(path, 40), fmt, vc, ad_s, ac_s);
+                    let ad_s = if ad > 0 {
+                        ad.to_string().red()
+                    } else {
+                        ad.to_string().dimmed()
+                    };
+                    let ac_s = if ac > 0 {
+                        ac.to_string().magenta()
+                    } else {
+                        ac.to_string().dimmed()
+                    };
+                    println!(
+                        "{:<40} {:<6} {:<22} {:>3} {:>3}",
+                        truncate_path(path, 40),
+                        fmt,
+                        vc,
+                        ad_s,
+                        ac_s
+                    );
                 }
+                let succeeded = total - failed;
+                let summary = format!("{} succeeded, {} failed", succeeded, failed);
+                if failed > 0 {
+                    println!("\n{} {}", "Summary:".bold().yellow(), summary.yellow());
+                } else {
+                    println!("\n{} {}", "Summary:".bold().green(), summary.green());
+                }
+            }
+
+            if fail_on_error && failed > 0 {
+                anyhow::bail!("batch scan completed with {} failed file(s)", failed);
             }
         }
 
@@ -795,9 +1189,15 @@ fn run(
             match &info.overlay {
                 None => {
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "overlay": null }))?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({ "overlay": null }))?
+                        );
                     } else if !quiet {
-                        println!("{}", "No overlay data — file ends at the last section.".green());
+                        println!(
+                            "{}",
+                            "No overlay data — file ends at the last section.".green()
+                        );
                     }
                 }
                 Some(ov) => {
@@ -812,11 +1212,19 @@ fn run(
                         std::fs::write(out_path, bytes)
                             .with_context(|| format!("failed to write '{}'", out_path))?;
                         if !quiet {
-                            println!("{} wrote {} bytes of overlay to {}", ">>".green(), bytes.len(), out_path.yellow());
+                            println!(
+                                "{} wrote {} bytes of overlay to {}",
+                                ">>".green(),
+                                bytes.len(),
+                                out_path.yellow()
+                            );
                         }
                     }
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "overlay": ov }))?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({ "overlay": ov }))?
+                        );
                     } else if !quiet || output.is_none() {
                         println!("\n{}", "Overlay:".bold().cyan());
                         println!("{}", "─".repeat(50).dimmed());
@@ -825,7 +1233,10 @@ fn run(
                         println!("  sha256   {}", ov.sha256.yellow());
                         println!("  entropy  {:.3}", ov.entropy);
                         if output.is_none() {
-                            println!("\n  {} pass -o <file> to extract these bytes", "tip:".dimmed());
+                            println!(
+                                "\n  {} pass -o <file> to extract these bytes",
+                                "tip:".dimmed()
+                            );
                         }
                     }
                 }
@@ -835,12 +1246,17 @@ fn run(
         Commands::Resources { path, json } => {
             let (info, _) = analyze(&path, nsl)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "version_info": info.version_info,
-                    "icon_hashes": info.icon_hashes,
-                }))?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "version_info": info.version_info,
+                        "icon_hashes": info.icon_hashes,
+                    }))?
+                );
             } else {
-                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                if !quiet {
+                    print_banner(&info.path, &info.format, &info.arch);
+                }
                 match &info.version_info {
                     Some(vi) => {
                         println!("\n{}", "Version Info:".bold().cyan());
@@ -857,7 +1273,11 @@ fn run(
                     None => println!("\n{}", "No VS_VERSIONINFO resource found.".dimmed()),
                 }
                 if !info.icon_hashes.is_empty() {
-                    println!("\n{} {} icon resource(s)", "Icons:".bold().cyan(), info.icon_hashes.len());
+                    println!(
+                        "\n{} {} icon resource(s)",
+                        "Icons:".bold().cyan(),
+                        info.icon_hashes.len()
+                    );
                     println!("{}", "─".repeat(50).dimmed());
                     for h in &info.icon_hashes {
                         println!("  sha256 {}", h.yellow());
@@ -873,44 +1293,95 @@ fn run(
             match &info.clr {
                 None => {
                     if json {
-                        println!("{}", serde_json::to_string_pretty(
-                            &serde_json::json!({"clr": null, "managed": false})
-                        )?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(
+                                &serde_json::json!({"clr": null, "managed": false})
+                            )?
+                        );
                     } else {
-                        if !quiet { print_banner(&info.path, &info.format, &info.arch); }
-                        println!("\n{}", "Not a managed (.NET) binary — no CLR header found.".dimmed());
+                        if !quiet {
+                            print_banner(&info.path, &info.format, &info.arch);
+                        }
+                        println!(
+                            "\n{}",
+                            "Not a managed (.NET) binary — no CLR header found.".dimmed()
+                        );
                     }
                 }
                 Some(ci) => {
                     if json {
-                        println!("{}", serde_json::to_string_pretty(
-                            &serde_json::json!({"managed": true, "clr": ci})
-                        )?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(
+                                &serde_json::json!({"managed": true, "clr": ci})
+                            )?
+                        );
                     } else {
-                        if !quiet { print_banner(&info.path, &info.format, &info.arch); }
+                        if !quiet {
+                            print_banner(&info.path, &info.format, &info.arch);
+                        }
 
                         println!("\n{}", "CLR / .NET Assembly:".bold().cyan());
                         println!("{}", "─".repeat(60).dimmed());
-                        println!("  {:<22} {}", "Assembly Name:".dimmed(),
-                            ci.assembly_name.as_deref().unwrap_or("(none)").yellow());
-                        println!("  {:<22} {}", "Version:".dimmed(),
-                            ci.assembly_version.as_deref().unwrap_or("(none)"));
-                        println!("  {:<22} {}", "Culture:".dimmed(),
-                            ci.culture.as_deref().unwrap_or("neutral"));
+                        println!(
+                            "  {:<22} {}",
+                            "Assembly Name:".dimmed(),
+                            ci.assembly_name.as_deref().unwrap_or("(none)").yellow()
+                        );
+                        println!(
+                            "  {:<22} {}",
+                            "Version:".dimmed(),
+                            ci.assembly_version.as_deref().unwrap_or("(none)")
+                        );
+                        println!(
+                            "  {:<22} {}",
+                            "Culture:".dimmed(),
+                            ci.culture.as_deref().unwrap_or("neutral")
+                        );
                         println!("  {:<22} {}", "CLR Runtime:".dimmed(), ci.runtime_version);
-                        println!("  {:<22} {}", "CLR Flags:".dimmed(), ci.clr_flags_desc.join(", "));
-                        println!("  {:<22} {}", "ILONLY:".dimmed(),
-                            if ci.is_ilonly { "YES".green().to_string() } else { "NO".dimmed().to_string() });
-                        println!("  {:<22} {}", "Requires 32-bit:".dimmed(),
-                            if ci.requires_32bit { "YES".yellow().to_string() } else { "NO".dimmed().to_string() });
-                        println!("  {:<22} {}", "Strong-Name Signed:".dimmed(),
-                            if ci.strong_name_signed { "YES".green().to_string() } else { "NO".dimmed().to_string() });
+                        println!(
+                            "  {:<22} {}",
+                            "CLR Flags:".dimmed(),
+                            ci.clr_flags_desc.join(", ")
+                        );
+                        println!(
+                            "  {:<22} {}",
+                            "ILONLY:".dimmed(),
+                            if ci.is_ilonly {
+                                "YES".green().to_string()
+                            } else {
+                                "NO".dimmed().to_string()
+                            }
+                        );
+                        println!(
+                            "  {:<22} {}",
+                            "Requires 32-bit:".dimmed(),
+                            if ci.requires_32bit {
+                                "YES".yellow().to_string()
+                            } else {
+                                "NO".dimmed().to_string()
+                            }
+                        );
+                        println!(
+                            "  {:<22} {}",
+                            "Strong-Name Signed:".dimmed(),
+                            if ci.strong_name_signed {
+                                "YES".green().to_string()
+                            } else {
+                                "NO".dimmed().to_string()
+                            }
+                        );
                         if let Some(mvid) = &ci.mvid {
                             println!("  {:<22} {}", "MVID:".dimmed(), mvid.dimmed());
                         }
 
                         if !ci.namespaces.is_empty() {
-                            println!("\n{} {} namespace(s)", "Namespaces:".bold().cyan(), ci.namespaces.len());
+                            println!(
+                                "\n{} {} namespace(s)",
+                                "Namespaces:".bold().cyan(),
+                                ci.namespaces.len()
+                            );
                             println!("{}", "─".repeat(60).dimmed());
                             for ns in ci.namespaces.iter().take(30) {
                                 println!("  {}", ns);
@@ -929,15 +1400,19 @@ fn run(
                         }
 
                         if !ci.cheat_pattern_hits.is_empty() {
-                            println!("\n{} {} hit(s)",
+                            println!(
+                                "\n{} {} hit(s)",
                                 "C# Cheat Patterns:".bold().red(),
-                                ci.cheat_pattern_hits.len());
+                                ci.cheat_pattern_hits.len()
+                            );
                             println!("{}", "─".repeat(60).dimmed());
                             for hit in &ci.cheat_pattern_hits {
-                                println!("  {} {} — {}",
+                                println!(
+                                    "  {} {} — {}",
                                     "⚑".red(),
                                     hit.matched.bold(),
-                                    hit.description.dimmed());
+                                    hit.description.dimmed()
+                                );
                             }
                         } else {
                             println!("\n{}", "No C# cheat patterns detected.".green());
@@ -947,31 +1422,51 @@ fn run(
             }
         }
 
-        Commands::FullDisasm { path, max_insns, freq, calls, json } => {
+        Commands::FullDisasm {
+            path,
+            max_insns,
+            freq,
+            calls,
+            json,
+        } => {
             let (info, data) = analyze(&path, nsl)?;
-            let cap = if max_insns == 0 { usize::MAX } else { max_insns };
+            let cap = if max_insns == 0 {
+                usize::MAX
+            } else {
+                max_insns
+            };
             let fd = disasm::disassemble_full(&data, cap)?;
 
             if json {
                 println!("{}", serde_json::to_string_pretty(&fd)?);
             } else {
-                if !quiet { print_banner(&info.path, &info.format, &info.arch); }
-                println!("\n{} full disassembly — {} instructions across {} section(s)\n",
-                    "◈".cyan().bold(), fd.total_insns, fd.sections.len());
+                if !quiet {
+                    print_banner(&info.path, &info.format, &info.arch);
+                }
+                println!(
+                    "\n{} full disassembly — {} instructions across {} section(s)\n",
+                    "◈".cyan().bold(),
+                    fd.total_insns,
+                    fd.sections.len()
+                );
 
                 for sec in &fd.sections {
-                    println!("{} {} @ 0x{:x}  ({} insns)",
+                    println!(
+                        "{} {} @ 0x{:x}  ({} insns)",
                         "▸".yellow(),
                         sec.section_name.bold().yellow(),
                         sec.base_addr,
-                        sec.instructions.len());
+                        sec.instructions.len()
+                    );
                     println!("{}", "─".repeat(70).dimmed());
                     for i in &sec.instructions {
-                        println!("  {:016x}  {:<32} {} {}",
+                        println!(
+                            "  {:016x}  {:<32} {} {}",
                             i.addr,
                             i.bytes.dimmed(),
                             i.mnemonic.yellow().bold(),
-                            i.op_str.white());
+                            i.op_str.white()
+                        );
                     }
                     println!();
                 }
@@ -987,7 +1482,11 @@ fn run(
                 }
 
                 if calls {
-                    println!("\n{} {} unique call target(s)", "Call Targets:".bold().cyan(), fd.call_targets.len());
+                    println!(
+                        "\n{} {} unique call target(s)",
+                        "Call Targets:".bold().cyan(),
+                        fd.call_targets.len()
+                    );
                     println!("{}", "─".repeat(40).dimmed());
                     let mut call_vec: Vec<(&u64, &usize)> = fd.call_targets.iter().collect();
                     call_vec.sort_by(|a, b| b.1.cmp(a.1));
@@ -998,7 +1497,11 @@ fn run(
             }
         }
 
-        Commands::Yara { path, rules: rule_paths, json } => {
+        Commands::Yara {
+            path,
+            rules: rule_paths,
+            json,
+        } => {
             let data = analyzer::read_file(&path, nsl)?;
             let matches = yara_scan::scan(&data, &rule_paths)?;
 
@@ -1006,8 +1509,12 @@ fn run(
                 println!("{}", serde_json::to_string_pretty(&matches)?);
             } else {
                 if !quiet {
-                    println!("\n{} YARA scan — {} rule match(es) in {}\n",
-                        "◈".cyan().bold(), matches.len(), path.yellow());
+                    println!(
+                        "\n{} YARA scan — {} rule match(es) in {}\n",
+                        "◈".cyan().bold(),
+                        matches.len(),
+                        path.yellow()
+                    );
                     println!("{}", "─".repeat(60).dimmed());
                 }
                 if matches.is_empty() {
@@ -1026,14 +1533,23 @@ fn run(
                             println!("    {}: {}", k.dimmed(), v);
                         }
                         for sm in &m.pattern_matches {
-                            let offsets: Vec<String> = sm.offsets.iter()
+                            let offsets: Vec<String> = sm
+                                .offsets
+                                .iter()
                                 .take(5)
                                 .map(|o| format!("0x{:x}", o))
                                 .collect();
                             let trail = if sm.offsets.len() > 5 {
                                 format!(" +{} more", sm.offsets.len() - 5)
-                            } else { String::new() };
-                            println!("    {} @ {}{}", sm.identifier.yellow(), offsets.join(", "), trail.dimmed());
+                            } else {
+                                String::new()
+                            };
+                            println!(
+                                "    {} @ {}{}",
+                                sm.identifier.yellow(),
+                                offsets.join(", "),
+                                trail.dimmed()
+                            );
                         }
                         println!();
                     }
@@ -1047,15 +1563,15 @@ fn run(
 fn print_opt_field(label: &str, value: &Option<String>) {
     match value {
         Some(v) => println!("  {:<18} {}", label.dimmed(), v),
-        None    => println!("  {:<18} {}", label.dimmed(), "(none)".dimmed()),
+        None => println!("  {:<18} {}", label.dimmed(), "(none)".dimmed()),
     }
 }
 
 /// Recursively (or not) collect candidate binary file paths under `dir`.
 fn collect_files(dir: &str, recursive: bool) -> Result<Vec<String>> {
     let mut out = Vec::new();
-    let entries = std::fs::read_dir(dir)
-        .with_context(|| format!("cannot read directory '{}'", dir))?;
+    let entries =
+        std::fs::read_dir(dir).with_context(|| format!("cannot read directory '{}'", dir))?;
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
@@ -1085,28 +1601,41 @@ fn truncate_path(p: &str, max: usize) -> String {
 
 // ── display helpers ───────────────────────────────────────────────────────────
 
-fn entropy_color<'a>(e: f64, s: &'a str) -> colored::ColoredString {
-    if e > 7.2 { s.red() } else if e > 6.5 { s.yellow() } else { s.green() }
+fn entropy_color(e: f64, s: &str) -> colored::ColoredString {
+    if e > 7.2 {
+        s.red()
+    } else if e > 6.5 {
+        s.yellow()
+    } else {
+        s.green()
+    }
 }
 
 fn print_banner(path: &str, fmt: &str, arch: &str) {
-    println!("\n{} {} {} {} {}\n",
-        "◈ sigil".bold().magenta(), "▸".dimmed(),
-        path.yellow(), format!("[{}]", fmt).cyan(), format!("[{}]", arch).cyan());
+    println!(
+        "\n{} {} {} {} {}\n",
+        "◈ sigil".bold().magenta(),
+        "▸".dimmed(),
+        path.yellow(),
+        format!("[{}]", fmt).cyan(),
+        format!("[{}]", arch).cyan()
+    );
 }
 
 fn print_headers(headers: &[(String, String)]) {
     println!("{}", "Headers:".bold().cyan());
     println!("{}", "─".repeat(44).dimmed());
-    for (k, v) in headers { println!("  {:<20} {}", k.dimmed(), v.bold()); }
+    for (k, v) in headers {
+        println!("  {:<20} {}", k.dimmed(), v.bold());
+    }
 }
 
 fn print_entropy_summary(entropy: f64, sections: &[analyzer::SectionInfo]) {
     let verdict = packing_verdict(entropy);
     let vc = match verdict {
         "LIKELY PACKED/ENCRYPTED" => verdict.red().bold(),
-        "SUSPICIOUS"              => verdict.yellow().bold(),
-        _                         => verdict.green().bold(),
+        "SUSPICIOUS" => verdict.yellow().bold(),
+        _ => verdict.green().bold(),
     };
     println!("\n{}", "Entropy:".bold().cyan());
     println!("{}", "─".repeat(44).dimmed());
@@ -1129,21 +1658,36 @@ fn print_imports_summary(imports: &[analyzer::ImportEntry]) {
         }
         println!("    {}", imp.function.green());
     }
-    if imports.len() > 80 { println!("  ... {} more", imports.len() - 80); }
+    if imports.len() > 80 {
+        println!("  ... {} more", imports.len() - 80);
+    }
 }
 
 fn print_strings_summary(strings: &[String]) {
-    println!("\n{} {} strings (top 30, use `sigil strings -c` to categorize)",
-        "Strings:".bold().cyan(), strings.len());
+    println!(
+        "\n{} {} strings (top 30, use `sigil strings -c` to categorize)",
+        "Strings:".bold().cyan(),
+        strings.len()
+    );
     println!("{}", "─".repeat(44).dimmed());
-    for s in strings.iter().take(30) { println!("  {}", s.dimmed()); }
-    if strings.len() > 30 { println!("  ... {} more", strings.len() - 30); }
+    for s in strings.iter().take(30) {
+        println!("  {}", s.dimmed());
+    }
+    if strings.len() > 30 {
+        println!("  ... {} more", strings.len() - 30);
+    }
 }
 
 fn print_cat_section(label: &str, items: &[String]) {
-    if items.is_empty() { return; }
+    if items.is_empty() {
+        return;
+    }
     println!("\n{} ({})", label.bold().cyan(), items.len());
     println!("{}", "─".repeat(44).dimmed());
-    for s in items.iter().take(50) { println!("  {}", s.yellow()); }
-    if items.len() > 50 { println!("  ... {} more", items.len() - 50); }
+    for s in items.iter().take(50) {
+        println!("  {}", s.yellow());
+    }
+    if items.len() > 50 {
+        println!("  ... {} more", items.len() - 50);
+    }
 }

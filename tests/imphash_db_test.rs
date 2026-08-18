@@ -1,7 +1,6 @@
 /// Tests for sigs::load_imphash_db and sigs::check_imphash_db — loading an
 /// external imphash database (MalwareBazaar export format) and checking
 /// computed imphashes against it.
-
 use sigil::sigs::{check_imphash_db, load_imphash_db};
 use std::io::Write;
 

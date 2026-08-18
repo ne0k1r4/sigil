@@ -1,3 +1,6 @@
+use goblin::Object;
+use sigil::analyzer::read_file;
+use sigil::clr::{parse_clr, ClrInfo};
 /// Tests for sigil::clr — .NET / CLR metadata parser.
 ///
 /// Tests cover:
@@ -7,11 +10,7 @@
 /// - Type/namespace extraction and obfuscator/cheat pattern scanning
 /// - parse_clr on the minimal PE fixture (not managed → None)
 /// - parse_clr on a synthetic managed PE (minimal CLR header)
-
 use std::path::PathBuf;
-use sigil::clr::{parse_clr, ClrInfo};
-use sigil::analyzer::read_file;
-use goblin::Object;
 
 fn fixture(name: &str) -> String {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -29,10 +28,10 @@ fn format_guid_correct_byte_order() {
     // Input bytes: 78 56 34 12  34 12  78 56  9a bc  de f0 12 34 56 78
     // Expected:    {12345678-1234-5678-9abc-def012345678}
     let bytes: [u8; 16] = [
-        0x78, 0x56, 0x34, 0x12,   // Data1 LE
-        0x34, 0x12,               // Data2 LE
-        0x78, 0x56,               // Data3 LE
-        0x9a, 0xbc,               // Data4[0..2] BE
+        0x78, 0x56, 0x34, 0x12, // Data1 LE
+        0x34, 0x12, // Data2 LE
+        0x78, 0x56, // Data3 LE
+        0x9a, 0xbc, // Data4[0..2] BE
         0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, // Data4[2..8] BE
     ];
     // format_guid is private — test indirectly via parse_clr on a synthetic
@@ -66,8 +65,16 @@ fn clr_flags_all_known_bits() {
     assert!(info.strong_name_signed);
     let desc = info.clr_flags_desc.join(",");
     assert!(desc.contains("ILONLY"), "missing ILONLY: {}", desc);
-    assert!(desc.contains("32BITREQUIRED"), "missing 32BITREQUIRED: {}", desc);
-    assert!(desc.contains("STRONGNAMESIGNED"), "missing STRONGNAMESIGNED: {}", desc);
+    assert!(
+        desc.contains("32BITREQUIRED"),
+        "missing 32BITREQUIRED: {}",
+        desc
+    );
+    assert!(
+        desc.contains("STRONGNAMESIGNED"),
+        "missing STRONGNAMESIGNED: {}",
+        desc
+    );
 }
 
 #[test]
@@ -114,28 +121,40 @@ fn obfuscator_pattern_matched_in_types() {
     // indirectly: make_synthetic_clr injects type names into the buffer and
     // we confirm obfuscator_hints is non-empty.
     // Direct type-scan coverage via the public interface:
-    let ns    = "ConfuserEx.Core".to_string();
-    let name  = "ProtectionPipeline".to_string();
+    let ns = "ConfuserEx.Core".to_string();
+    let name = "ProtectionPipeline".to_string();
     // scan_types is private; test via parse_clr on a buffer that contains
     // TypeDef rows with confuser namespace (done in extended synthetic test below).
     // For now, verify the pattern set contains the expected keyword:
-    assert!(sigil::clr::OBFUSCATOR_PATTERNS_FOR_TEST
-        .iter().any(|&(p, _)| p == "ConfuserEx"),
-        "OBFUSCATOR_PATTERNS should include ConfuserEx");
+    assert!(
+        sigil::clr::OBFUSCATOR_PATTERNS_FOR_TEST
+            .iter()
+            .any(|&(p, _)| p == "ConfuserEx"),
+        "OBFUSCATOR_PATTERNS should include ConfuserEx"
+    );
     let _ = (ns, name);
 }
 
 #[test]
 fn cheat_pattern_matched_in_types() {
-    assert!(sigil::clr::CHEAT_PATTERNS_FOR_TEST
-        .iter().any(|&(ns, _, _)| ns == "Aimbot"),
-        "CHEAT_PATTERNS should include Aimbot");
-    assert!(sigil::clr::CHEAT_PATTERNS_FOR_TEST
-        .iter().any(|&(ns, _, _)| ns == "ESP"),
-        "CHEAT_PATTERNS should include ESP");
-    assert!(sigil::clr::CHEAT_PATTERNS_FOR_TEST
-        .iter().any(|&(ns, _, _)| ns == "Spoofer"),
-        "CHEAT_PATTERNS should include Spoofer");
+    assert!(
+        sigil::clr::CHEAT_PATTERNS_FOR_TEST
+            .iter()
+            .any(|&(ns, _, _)| ns == "Aimbot"),
+        "CHEAT_PATTERNS should include Aimbot"
+    );
+    assert!(
+        sigil::clr::CHEAT_PATTERNS_FOR_TEST
+            .iter()
+            .any(|&(ns, _, _)| ns == "ESP"),
+        "CHEAT_PATTERNS should include ESP"
+    );
+    assert!(
+        sigil::clr::CHEAT_PATTERNS_FOR_TEST
+            .iter()
+            .any(|&(ns, _, _)| ns == "Spoofer"),
+        "CHEAT_PATTERNS should include Spoofer"
+    );
 }
 
 // ── synthetic managed PE ───────────────────────────────────────────────────────
@@ -149,8 +168,8 @@ fn cheat_pattern_matched_in_types() {
 /// can use this helper.
 fn make_synthetic_clr(clr_flags: u32) -> ClrInfo {
     // All sizes chosen to be minimal but structurally valid:
-    let lfanew: u32   = 0x80;
-    let code_off: u32 = 0x200;  // PE headers occupy first 0x200 bytes
+    let lfanew: u32 = 0x80;
+    let code_off: u32 = 0x200; // PE headers occupy first 0x200 bytes
 
     // ── metadata root ─────────────────────────────────────────────────────────
     // BSJB magic + version + flags + stream count + stream headers + data
@@ -176,11 +195,8 @@ fn make_synthetic_clr(clr_flags: u32) -> ClrInfo {
     // GUID stream: one GUID = 16 bytes
     // We want a known MVID so we can assert on its formatted value.
     let guid_stream: Vec<u8> = vec![
-        0x78, 0x56, 0x34, 0x12,
-        0x34, 0x12,
-        0x78, 0x56,
-        0x9a, 0xbc,
-        0xde, 0xf0, 0x12, 0x34, 0x56, 0x78,
+        0x78, 0x56, 0x34, 0x12, 0x34, 0x12, 0x78, 0x56, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56,
+        0x78,
     ];
 
     // Stream names (null-terminated, 4-byte aligned):
@@ -188,8 +204,8 @@ fn make_synthetic_clr(clr_flags: u32) -> ClrInfo {
     // "#GUID\0" → 6 bytes → pad to 8
     // "#~\0" → 3 bytes → pad to 4
     let sname_strings = b"#Strings\0\0\0\0"; // 12 bytes
-    let sname_guid    = b"#GUID\0\0\0";      // 8 bytes
-    let sname_tables  = b"#~\0\0";           // 4 bytes
+    let sname_guid = b"#GUID\0\0\0"; // 8 bytes
+    let sname_tables = b"#~\0\0"; // 4 bytes
 
     // Each stream header: offset(u32) + size(u32) + name(variable aligned)
     // We'll compute offsets relative to the start of the metadata root.
@@ -204,14 +220,14 @@ fn make_synthetic_clr(clr_flags: u32) -> ClrInfo {
     //
     // Stream offsets (absolute from metadata root start):
     let strings_off: u32 = 80;
-    let guid_off: u32    = strings_off + strings_stream.len() as u32;
+    let guid_off: u32 = strings_off + strings_stream.len() as u32;
     // align guid_off to 4
     let guid_off = (guid_off + 3) & !3;
-    let tables_off: u32  = guid_off + guid_stream.len() as u32;
+    let tables_off: u32 = guid_off + guid_stream.len() as u32;
     let tables_off = (tables_off + 3) & !3;
 
     let mut meta_root: Vec<u8> = Vec::new();
-    meta_root.extend_from_slice(b"BSJB");        // magic
+    meta_root.extend_from_slice(b"BSJB"); // magic
     meta_root.extend_from_slice(&1u16.to_le_bytes()); // major
     meta_root.extend_from_slice(&1u16.to_le_bytes()); // minor
     meta_root.extend_from_slice(&0u32.to_le_bytes()); // reserved
@@ -236,11 +252,17 @@ fn make_synthetic_clr(clr_flags: u32) -> ClrInfo {
     meta_root.extend_from_slice(sname_tables);
 
     // Pad stream data to their computed offsets
-    while meta_root.len() < strings_off as usize { meta_root.push(0); }
+    while meta_root.len() < strings_off as usize {
+        meta_root.push(0);
+    }
     meta_root.extend_from_slice(&strings_stream);
-    while meta_root.len() < guid_off as usize { meta_root.push(0); }
+    while meta_root.len() < guid_off as usize {
+        meta_root.push(0);
+    }
     meta_root.extend_from_slice(&guid_stream);
-    while meta_root.len() < tables_off as usize { meta_root.push(0); }
+    while meta_root.len() < tables_off as usize {
+        meta_root.push(0);
+    }
     meta_root.extend_from_slice(&tables_stream);
 
     // ── assemble a minimal PE ─────────────────────────────────────────────────
@@ -250,13 +272,13 @@ fn make_synthetic_clr(clr_flags: u32) -> ClrInfo {
     // - One fake section that maps the metadata RVA → file offset
     // - The metadata root bytes in that section's raw data
 
-    let clr_rva: u32  = 0x1000; // VA of the CLR header in our fake section
+    let clr_rva: u32 = 0x1000; // VA of the CLR header in our fake section
     let meta_rva: u32 = 0x1048; // VA of the metadata root (CLR header is 72 bytes)
 
     // Total image: PE headers (0x200) + one 4KB section page containing
     // both the CLR header and the metadata root
     let section_raw_off: u32 = code_off;
-    let section_raw_sz: u32  = 0x1000;
+    let section_raw_sz: u32 = 0x1000;
 
     let mut pe_data = vec![0u8; (section_raw_off + section_raw_sz) as usize];
 
@@ -266,43 +288,43 @@ fn make_synthetic_clr(clr_flags: u32) -> ClrInfo {
 
     // PE signature
     let peo = lfanew as usize;
-    pe_data[peo..peo+4].copy_from_slice(b"PE\0\0");
+    pe_data[peo..peo + 4].copy_from_slice(b"PE\0\0");
 
     // COFF header (20 bytes): machine=AMD64, 1 section, opt_hdr_sz=240, chars=0x22
-    write_u16(&mut pe_data, peo+4,  0x8664); // AMD64
-    write_u16(&mut pe_data, peo+6,  1);      // numSections
-    write_u16(&mut pe_data, peo+16, 240);    // optHdrSz
-    write_u16(&mut pe_data, peo+18, 0x0022); // chars
+    write_u16(&mut pe_data, peo + 4, 0x8664); // AMD64
+    write_u16(&mut pe_data, peo + 6, 1); // numSections
+    write_u16(&mut pe_data, peo + 16, 240); // optHdrSz
+    write_u16(&mut pe_data, peo + 18, 0x0022); // chars
 
     // Optional header magic (PE32+ = 0x20B) at peo+24
-    write_u16(&mut pe_data, peo+24, 0x020B);
+    write_u16(&mut pe_data, peo + 24, 0x020B);
 
     // imageBase at peo+24+24 = peo+48 (PE32+ layout)
-    write_u64(&mut pe_data, peo+48, 0x140000000u64);
+    write_u64(&mut pe_data, peo + 48, 0x140000000u64);
 
     // Data directory 14 (CLR header): at peo+24+112+14*8 = peo+24+112+112 = peo+248
     let dd_off = peo + 24 + 112;
-    write_u32(&mut pe_data, dd_off + 14*8,     clr_rva);  // RVA
-    write_u32(&mut pe_data, dd_off + 14*8 + 4, 72);       // size
+    write_u32(&mut pe_data, dd_off + 14 * 8, clr_rva); // RVA
+    write_u32(&mut pe_data, dd_off + 14 * 8 + 4, 72); // size
 
     // Section header at peo+24+240 = peo+264:
     let sh_off = peo + 24 + 240;
-    pe_data[sh_off..sh_off+8].copy_from_slice(b".text\0\0\0");
-    write_u32(&mut pe_data, sh_off+8,  0x2000);              // virtual size
-    write_u32(&mut pe_data, sh_off+12, 0x1000);              // virtual address
-    write_u32(&mut pe_data, sh_off+16, section_raw_sz);      // raw size
-    write_u32(&mut pe_data, sh_off+20, section_raw_off);     // raw offset
+    pe_data[sh_off..sh_off + 8].copy_from_slice(b".text\0\0\0");
+    write_u32(&mut pe_data, sh_off + 8, 0x2000); // virtual size
+    write_u32(&mut pe_data, sh_off + 12, 0x1000); // virtual address
+    write_u32(&mut pe_data, sh_off + 16, section_raw_sz); // raw size
+    write_u32(&mut pe_data, sh_off + 20, section_raw_off); // raw offset
 
     // ── CLR header (IMAGE_COR20_HEADER, 72 bytes) in the section ─────────────
     let section_data_base = section_raw_off as usize;
     let clr_file_off = section_data_base; // clr_rva = 0x1000, section VA = 0x1000
 
-    write_u32(&mut pe_data, clr_file_off,      72);          // cb
-    write_u16(&mut pe_data, clr_file_off+4,    2);           // major runtime = 2
-    write_u16(&mut pe_data, clr_file_off+6,    5);           // minor runtime = 5
-    write_u32(&mut pe_data, clr_file_off+8,    meta_rva);    // metadata RVA
-    write_u32(&mut pe_data, clr_file_off+12,   meta_root.len() as u32); // metadata size
-    write_u32(&mut pe_data, clr_file_off+16,   clr_flags);   // flags
+    write_u32(&mut pe_data, clr_file_off, 72); // cb
+    write_u16(&mut pe_data, clr_file_off + 4, 2); // major runtime = 2
+    write_u16(&mut pe_data, clr_file_off + 6, 5); // minor runtime = 5
+    write_u32(&mut pe_data, clr_file_off + 8, meta_rva); // metadata RVA
+    write_u32(&mut pe_data, clr_file_off + 12, meta_root.len() as u32); // metadata size
+    write_u32(&mut pe_data, clr_file_off + 16, clr_flags); // flags
 
     // ── metadata root in the same section ────────────────────────────────────
     // meta_rva = 0x1048, section VA = 0x1000 → offset in raw data = 0x48
@@ -316,12 +338,14 @@ fn make_synthetic_clr(clr_flags: u32) -> ClrInfo {
     use goblin::pe::section_table::SectionTable;
 
     // Build a goblin SectionTable entry manually matching what we wrote above
-    let mut sec = SectionTable::default();
-    sec.name = *b".text\0\0\0";
-    sec.virtual_size           = 0x2000;
-    sec.virtual_address        = 0x1000;
-    sec.size_of_raw_data       = section_raw_sz;
-    sec.pointer_to_raw_data    = section_raw_off;
+    let sec = SectionTable {
+        name: *b".text\0\0\0",
+        virtual_size: 0x2000,
+        virtual_address: 0x1000,
+        size_of_raw_data: section_raw_sz,
+        pointer_to_raw_data: section_raw_off,
+        ..Default::default()
+    };
 
     parse_clr(&pe_data, lfanew, &[sec])
         .expect("parse_clr should succeed on a valid synthetic managed PE")
@@ -329,38 +353,44 @@ fn make_synthetic_clr(clr_flags: u32) -> ClrInfo {
 
 fn write_u16(buf: &mut [u8], off: usize, v: u16) {
     if off + 2 <= buf.len() {
-        buf[off..off+2].copy_from_slice(&v.to_le_bytes());
+        buf[off..off + 2].copy_from_slice(&v.to_le_bytes());
     }
 }
 fn write_u32(buf: &mut [u8], off: usize, v: u32) {
     if off + 4 <= buf.len() {
-        buf[off..off+4].copy_from_slice(&v.to_le_bytes());
+        buf[off..off + 4].copy_from_slice(&v.to_le_bytes());
     }
 }
 fn write_u64(buf: &mut [u8], off: usize, v: u64) {
     if off + 8 <= buf.len() {
-        buf[off..off+8].copy_from_slice(&v.to_le_bytes());
+        buf[off..off + 8].copy_from_slice(&v.to_le_bytes());
     }
 }
 
 #[test]
 fn synthetic_managed_pe_is_parsed() {
     let info = make_synthetic_clr(0x01); // ILONLY
-    // Should have parsed successfully
+                                         // Should have parsed successfully
     assert!(info.is_ilonly);
     assert!(!info.requires_32bit);
     assert!(!info.strong_name_signed);
     // Runtime version comes from the metadata root version string
     assert_eq!(info.runtime_version, "v4.0.30319");
     // CLR flags desc should contain ILONLY
-    assert!(info.clr_flags_desc.iter().any(|s| s == "ILONLY"),
-        "expected ILONLY in flags_desc: {:?}", info.clr_flags_desc);
+    assert!(
+        info.clr_flags_desc.iter().any(|s| s == "ILONLY"),
+        "expected ILONLY in flags_desc: {:?}",
+        info.clr_flags_desc
+    );
     // MVID: may or may not parse depending on stream offset alignment in
     // the synthetic buffer; verify format if present (36-char GUID string
     // wrapped in braces), and that we don't panic either way.
     if let Some(mvid) = &info.mvid {
-        assert!(mvid.starts_with('{') && mvid.ends_with('}') && mvid.len() == 38,
-            "MVID should be a 38-char RFC 4122 GUID string, got: {}", mvid);
+        assert!(
+            mvid.starts_with('{') && mvid.ends_with('}') && mvid.len() == 38,
+            "MVID should be a 38-char RFC 4122 GUID string, got: {}",
+            mvid
+        );
     }
     // No assembly rows → assembly_name is None
     assert!(info.assembly_name.is_none());
@@ -374,62 +404,67 @@ fn corrupt_metadata_root_returns_partial_info() {
     // If the metadata root has bad magic, find_metadata_streams returns None
     // and parse_clr should still return Some(ClrInfo) with the unreadable
     // streams warning — not panic or return None.
-    let lfanew: u32  = 0x80;
+    let lfanew: u32 = 0x80;
     let clr_rva: u32 = 0x1000;
     let meta_rva: u32 = 0x1048;
 
     let section_raw_off: u32 = 0x200;
-    let section_raw_sz: u32  = 0x1000;
+    let section_raw_sz: u32 = 0x1000;
     let mut pe_data = vec![0u8; (section_raw_off + section_raw_sz) as usize];
 
     pe_data[0..2].copy_from_slice(b"MZ");
     write_u32(&mut pe_data, 0x3c, lfanew);
     let peo = lfanew as usize;
-    pe_data[peo..peo+4].copy_from_slice(b"PE\0\0");
-    write_u16(&mut pe_data, peo+4, 0x8664);
-    write_u16(&mut pe_data, peo+6, 1);
-    write_u16(&mut pe_data, peo+16, 240);
-    write_u16(&mut pe_data, peo+18, 0x0022);
-    write_u16(&mut pe_data, peo+24, 0x020B);
+    pe_data[peo..peo + 4].copy_from_slice(b"PE\0\0");
+    write_u16(&mut pe_data, peo + 4, 0x8664);
+    write_u16(&mut pe_data, peo + 6, 1);
+    write_u16(&mut pe_data, peo + 16, 240);
+    write_u16(&mut pe_data, peo + 18, 0x0022);
+    write_u16(&mut pe_data, peo + 24, 0x020B);
 
     let dd_off = peo + 24 + 112;
-    write_u32(&mut pe_data, dd_off + 14*8,     clr_rva);
-    write_u32(&mut pe_data, dd_off + 14*8 + 4, 72);
+    write_u32(&mut pe_data, dd_off + 14 * 8, clr_rva);
+    write_u32(&mut pe_data, dd_off + 14 * 8 + 4, 72);
 
     let sh_off = peo + 24 + 240;
-    pe_data[sh_off..sh_off+8].copy_from_slice(b".text\0\0\0");
-    write_u32(&mut pe_data, sh_off+8,  0x2000);
-    write_u32(&mut pe_data, sh_off+12, 0x1000);
-    write_u32(&mut pe_data, sh_off+16, section_raw_sz);
-    write_u32(&mut pe_data, sh_off+20, section_raw_off);
+    pe_data[sh_off..sh_off + 8].copy_from_slice(b".text\0\0\0");
+    write_u32(&mut pe_data, sh_off + 8, 0x2000);
+    write_u32(&mut pe_data, sh_off + 12, 0x1000);
+    write_u32(&mut pe_data, sh_off + 16, section_raw_sz);
+    write_u32(&mut pe_data, sh_off + 20, section_raw_off);
 
     let clr_off = section_raw_off as usize;
-    write_u32(&mut pe_data, clr_off,      72);
-    write_u16(&mut pe_data, clr_off+4,    2);
-    write_u16(&mut pe_data, clr_off+6,    5);
-    write_u32(&mut pe_data, clr_off+8,    meta_rva);
-    write_u32(&mut pe_data, clr_off+12,   32);
-    write_u32(&mut pe_data, clr_off+16,   0x01); // ILONLY
+    write_u32(&mut pe_data, clr_off, 72);
+    write_u16(&mut pe_data, clr_off + 4, 2);
+    write_u16(&mut pe_data, clr_off + 6, 5);
+    write_u32(&mut pe_data, clr_off + 8, meta_rva);
+    write_u32(&mut pe_data, clr_off + 12, 32);
+    write_u32(&mut pe_data, clr_off + 16, 0x01); // ILONLY
 
     // Write GARBAGE at metadata location (bad magic, not BSJB)
     let meta_off = section_raw_off as usize + 0x48;
-    pe_data[meta_off..meta_off+4].copy_from_slice(b"JUNK");
+    pe_data[meta_off..meta_off + 4].copy_from_slice(b"JUNK");
 
     use goblin::pe::section_table::SectionTable;
-    let mut sec = SectionTable::default();
-    sec.name = *b".text\0\0\0";
-    sec.virtual_size        = 0x2000;
-    sec.virtual_address     = 0x1000;
-    sec.size_of_raw_data    = section_raw_sz;
-    sec.pointer_to_raw_data = section_raw_off;
+    let sec = SectionTable {
+        name: *b".text\0\0\0",
+        virtual_size: 0x2000,
+        virtual_address: 0x1000,
+        size_of_raw_data: section_raw_sz,
+        pointer_to_raw_data: section_raw_off,
+        ..Default::default()
+    };
 
     let result = parse_clr(&pe_data, lfanew, &[sec]);
     // Must return Some (CLR header is valid) even though metadata is garbage
     let info = result.expect("should return Some even with corrupt metadata");
     // Should carry the 'unreadable' obfuscator hint
     assert!(
-        info.obfuscator_hints.iter().any(|h| h.contains("unreadable")),
-        "expected 'unreadable' hint for corrupt metadata, got: {:?}", info.obfuscator_hints
+        info.obfuscator_hints
+            .iter()
+            .any(|h| h.contains("unreadable")),
+        "expected 'unreadable' hint for corrupt metadata, got: {:?}",
+        info.obfuscator_hints
     );
     assert!(info.is_ilonly);
 }

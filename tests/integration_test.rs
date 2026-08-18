@@ -1,7 +1,6 @@
 /// Integration tests for sigil.
 /// Fixtures are pre-built minimal PE/ELF binaries in tests/fixtures/.
 /// Run with: cargo test
-
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
@@ -35,16 +34,28 @@ mod analyzer_pe {
         let (info, _) = analyze(&fixture("minimal.exe"), false).unwrap();
         assert!(!info.sections.is_empty(), "expected at least one section");
         let names: Vec<&str> = info.sections.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&".text"), "expected .text section, got: {:?}", names);
-        assert!(names.contains(&".data"), "expected .data section, got: {:?}", names);
+        assert!(
+            names.contains(&".text"),
+            "expected .text section, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&".data"),
+            "expected .data section, got: {:?}",
+            names
+        );
     }
 
     #[test]
     fn pe_section_entropy_in_range() {
         let (info, _) = analyze(&fixture("minimal.exe"), false).unwrap();
         for s in &info.sections {
-            assert!(s.entropy >= 0.0 && s.entropy <= 8.0,
-                "section '{}' entropy {} out of [0,8]", s.name, s.entropy);
+            assert!(
+                s.entropy >= 0.0 && s.entropy <= 8.0,
+                "section '{}' entropy {} out of [0,8]",
+                s.name,
+                s.entropy
+            );
         }
     }
 
@@ -58,8 +69,10 @@ mod analyzer_pe {
     #[test]
     fn pe_no_tls_in_minimal() {
         let (info, _) = analyze(&fixture("minimal.exe"), false).unwrap();
-        assert!(info.tls_callbacks.is_empty(),
-            "minimal PE should have no TLS callbacks");
+        assert!(
+            info.tls_callbacks.is_empty(),
+            "minimal PE should have no TLS callbacks"
+        );
     }
 
     #[test]
@@ -76,8 +89,11 @@ mod analyzer_pe {
     fn pe_overall_entropy_reasonable() {
         let (info, _) = analyze(&fixture("minimal.exe"), false).unwrap();
         // Minimal unobfuscated binary should not look packed
-        assert!(info.entropy < 7.0,
-            "minimal PE entropy {} unexpectedly high", info.entropy);
+        assert!(
+            info.entropy < 7.0,
+            "minimal PE entropy {} unexpectedly high",
+            info.entropy
+        );
         assert_eq!(packing_verdict(info.entropy), "NORMAL");
     }
 }
@@ -102,10 +118,16 @@ mod analyzer_elf {
     #[test]
     fn elf_sections_present() {
         let (info, _) = analyze(&fixture("minimal.elf"), false).unwrap();
-        assert!(!info.sections.is_empty(), "expected at least one ELF section");
+        assert!(
+            !info.sections.is_empty(),
+            "expected at least one ELF section"
+        );
         let names: Vec<&str> = info.sections.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.iter().any(|n| n.contains("text")),
-            "expected .text-like section, got: {:?}", names);
+        assert!(
+            names.iter().any(|n| n.contains("text")),
+            "expected .text-like section, got: {:?}",
+            names
+        );
     }
 
     #[test]
@@ -114,8 +136,11 @@ mod analyzer_elf {
         // Minimal ELF has no dynamic symbols — imports list should be empty
         // or any present should use "(dynamic)" not a cross-product of libraries
         for imp in &info.imports {
-            assert_eq!(imp.library, "(dynamic)",
-                "ELF import library should be '(dynamic)', got '{}'", imp.library);
+            assert_eq!(
+                imp.library, "(dynamic)",
+                "ELF import library should be '(dynamic)', got '{}'",
+                imp.library
+            );
         }
     }
 
@@ -123,8 +148,12 @@ mod analyzer_elf {
     fn elf_section_entropy_in_range() {
         let (info, _) = analyze(&fixture("minimal.elf"), false).unwrap();
         for s in &info.sections {
-            assert!(s.entropy >= 0.0 && s.entropy <= 8.0,
-                "section '{}' entropy {} out of [0,8]", s.name, s.entropy);
+            assert!(
+                s.entropy >= 0.0 && s.entropy <= 8.0,
+                "section '{}' entropy {} out of [0,8]",
+                s.name,
+                s.entropy
+            );
         }
     }
 
@@ -148,7 +177,7 @@ mod analyzer_elf {
 
 #[cfg(test)]
 mod entropy {
-    use sigil::analyzer::{shannon_entropy, packing_verdict, packing_hints_from_bytes};
+    use sigil::analyzer::{packing_hints_from_bytes, packing_verdict, shannon_entropy};
 
     #[test]
     fn empty_slice_is_zero() {
@@ -165,7 +194,11 @@ mod entropy {
     fn all_256_values_near_eight() {
         let data: Vec<u8> = (0u8..=255).collect();
         let h = shannon_entropy(&data);
-        assert!((h - 8.0).abs() < 0.001, "entropy of uniform dist should be ~8.0, got {}", h);
+        assert!(
+            (h - 8.0).abs() < 0.001,
+            "entropy of uniform dist should be ~8.0, got {}",
+            h
+        );
     }
 
     #[test]
@@ -173,7 +206,11 @@ mod entropy {
         // All 256 byte values repeated 16x — uniform distribution, entropy = 8.0
         let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
         let h = shannon_entropy(&data);
-        assert!(h > 7.9, "uniform distribution entropy should be ~8.0, got {}", h);
+        assert!(
+            h > 7.9,
+            "uniform distribution entropy should be ~8.0, got {}",
+            h
+        );
     }
 
     #[test]
@@ -200,7 +237,11 @@ mod entropy {
         let hints = packing_hints_from_bytes(&data).unwrap();
         // Should only contain the "No packing indicators" message
         assert_eq!(hints.len(), 1);
-        assert!(hints[0].starts_with("No packing"), "unexpected hint: {}", hints[0]);
+        assert!(
+            hints[0].starts_with("No packing"),
+            "unexpected hint: {}",
+            hints[0]
+        );
     }
 }
 
@@ -277,7 +318,10 @@ mod hashes {
     fn sha256_known_value() {
         // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         let h = from_bytes(&[]);
-        assert_eq!(h.sha256, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            h.sha256,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     #[test]
@@ -299,7 +343,7 @@ mod hashes {
 
 #[cfg(test)]
 mod strings {
-    use sigil::analyzer::{extract_strings, categorize_strings};
+    use sigil::analyzer::{categorize_strings, extract_strings};
 
     #[test]
     fn extracts_ascii_strings() {
@@ -313,7 +357,10 @@ mod strings {
     fn respects_min_len() {
         let data = b"hi\x00hello\x00";
         let strings = extract_strings(data, 4);
-        assert!(!strings.contains(&"hi".to_string()), "short string should be excluded");
+        assert!(
+            !strings.contains(&"hi".to_string()),
+            "short string should be excluded"
+        );
         assert!(strings.contains(&"hello".to_string()));
     }
 
@@ -365,7 +412,7 @@ mod strings {
 
 #[cfg(test)]
 mod sigs {
-    use sigil::sigs::{scan_antidebug, scan_anticheat};
+    use sigil::sigs::{scan_anticheat, scan_antidebug};
 
     fn imp(lib: &str, func: &str) -> (String, String) {
         (lib.to_string(), func.to_string())
@@ -416,8 +463,10 @@ mod sigs {
 
     #[test]
     fn clean_binary_no_hits() {
-        let imports = vec![imp("KERNEL32.dll", "CreateFileA"),
-                           imp("KERNEL32.dll", "ReadFile")];
+        let imports = vec![
+            imp("KERNEL32.dll", "CreateFileA"),
+            imp("KERNEL32.dll", "ReadFile"),
+        ];
         let ad = scan_antidebug(&imports, &[], None);
         let ac = scan_anticheat(&imports, &[], None);
         assert!(ad.is_empty(), "clean imports should not trigger antidebug");
@@ -439,7 +488,10 @@ mod size_cap {
         let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         p.push("tests/fixtures/minimal.exe");
         let result = read_file(&p.to_string_lossy(), true);
-        assert!(result.is_ok(), "read_file with no_size_limit=true should succeed");
+        assert!(
+            result.is_ok(),
+            "read_file with no_size_limit=true should succeed"
+        );
     }
 
     #[test]

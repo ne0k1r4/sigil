@@ -1,7 +1,6 @@
-/// Tests for full-binary disassembly and YARA scanning.
-
-use std::path::PathBuf;
 use sigil::disasm::disassemble_full;
+/// Tests for full-binary disassembly and YARA scanning.
+use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -16,9 +15,14 @@ fn fixture(name: &str) -> String {
 fn full_disasm_pe_finds_text_section() {
     let data = std::fs::read(fixture("minimal.exe")).unwrap();
     let fd = disassemble_full(&data, 1000).unwrap();
-    assert!(!fd.sections.is_empty(), "expected at least one executable section");
-    assert!(fd.sections.iter().any(|s| s.section_name.contains("text")),
-        "expected .text section in full disasm");
+    assert!(
+        !fd.sections.is_empty(),
+        "expected at least one executable section"
+    );
+    assert!(
+        fd.sections.iter().any(|s| s.section_name.contains("text")),
+        "expected .text section in full disasm"
+    );
 }
 
 #[test]
@@ -34,17 +38,29 @@ fn full_disasm_pe_produces_instructions() {
 fn full_disasm_pe_mnemonic_freq_populated() {
     let data = std::fs::read(fixture("minimal.exe")).unwrap();
     let fd = disassemble_full(&data, 1000).unwrap();
-    assert!(!fd.mnemonic_freq.is_empty(), "mnemonic_freq should be populated");
+    assert!(
+        !fd.mnemonic_freq.is_empty(),
+        "mnemonic_freq should be populated"
+    );
     // xor and ret must appear since our fixture starts with those
-    assert!(fd.mnemonic_freq.contains_key("xor"), "expected 'xor' in mnemonic freq");
-    assert!(fd.mnemonic_freq.contains_key("ret"), "expected 'ret' in mnemonic freq");
+    assert!(
+        fd.mnemonic_freq.contains_key("xor"),
+        "expected 'xor' in mnemonic freq"
+    );
+    assert!(
+        fd.mnemonic_freq.contains_key("ret"),
+        "expected 'ret' in mnemonic freq"
+    );
 }
 
 #[test]
 fn full_disasm_elf_finds_text_section() {
     let data = std::fs::read(fixture("minimal.elf")).unwrap();
     let fd = disassemble_full(&data, 1000).unwrap();
-    assert!(!fd.sections.is_empty(), "ELF: expected at least one executable section");
+    assert!(
+        !fd.sections.is_empty(),
+        "ELF: expected at least one executable section"
+    );
     assert!(fd.total_insns > 0, "ELF: expected at least one instruction");
 }
 
@@ -54,8 +70,12 @@ fn full_disasm_section_cap_respected() {
     // Cap at 1 instruction per section
     let fd = disassemble_full(&data, 1).unwrap();
     for sec in &fd.sections {
-        assert!(sec.instructions.len() <= 1,
-            "section '{}' has {} insns, cap was 1", sec.section_name, sec.instructions.len());
+        assert!(
+            sec.instructions.len() <= 1,
+            "section '{}' has {} insns, cap was 1",
+            sec.section_name,
+            sec.instructions.len()
+        );
     }
 }
 
@@ -92,10 +112,14 @@ mod yara_tests {
             f.write_all(content.as_bytes()).unwrap();
             TempFile(path)
         }
-        fn path(&self) -> String { self.0.to_str().unwrap().to_string() }
+        fn path(&self) -> String {
+            self.0.to_str().unwrap().to_string()
+        }
     }
     impl Drop for TempFile {
-        fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 
     #[test]
@@ -163,7 +187,7 @@ rule With_meta {
         let f = TempFile::new("meta.yar", rule);
         let matches = scan(b"hello world", &[f.path()]).unwrap();
         assert_eq!(matches.len(), 1);
-        let meta_keys: Vec<&str> = matches[0].meta.iter().map(|(k,_)| k.as_str()).collect();
+        let meta_keys: Vec<&str> = matches[0].meta.iter().map(|(k, _)| k.as_str()).collect();
         assert!(meta_keys.contains(&"author"));
         assert!(meta_keys.contains(&"severity"));
     }

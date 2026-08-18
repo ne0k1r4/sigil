@@ -1,9 +1,8 @@
-/// Tests for parse_pe_resources — walking the PE resource directory tree
-/// to find VS_VERSIONINFO (RT_VERSION) and RT_ICON resources.
-
-use std::path::PathBuf;
 use goblin::Object;
 use sigil::analyzer::{parse_pe_resources, pe_data_directory, read_file};
+/// Tests for parse_pe_resources — walking the PE resource directory tree
+/// to find VS_VERSIONINFO (RT_VERSION) and RT_ICON resources.
+use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

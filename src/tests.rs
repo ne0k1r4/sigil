@@ -1,8 +1,7 @@
 #[cfg(test)]
-mod tests {
+mod unit_tests {
     use crate::analyzer::{
-        categorize_strings, extract_strings, pattern_search, shannon_entropy,
-        parse_rich_header,
+        categorize_strings, extract_strings, parse_rich_header, pattern_search, shannon_entropy,
     };
     use crate::hashes::from_bytes;
     use crate::sigs::{ExternalSigs, SigRule};
@@ -76,7 +75,10 @@ mod tests {
         assert_eq!(cats.urls, vec!["https://google.com/index.html"]);
         assert_eq!(cats.ips, vec!["192.168.1.1:8080"]);
         assert_eq!(cats.registry, vec!["HKLM\\Software\\Microsoft"]);
-        assert_eq!(cats.paths, vec!["C:\\Windows\\System32\\calc.exe", "/proc/self/cmdline"]);
+        assert_eq!(
+            cats.paths,
+            vec!["C:\\Windows\\System32\\calc.exe", "/proc/self/cmdline"]
+        );
         assert_eq!(cats.guids, vec!["{12345678-1234-1234-1234-123456789012}"]);
         assert_eq!(cats.other, vec!["Hello World"]);
     }
@@ -87,8 +89,6 @@ mod tests {
         let dummy_data = b"MZ\x00\x00notapefile";
         assert!(from_bytes(dummy_data).imphash.is_none());
     }
-
-
 
     // ── rich header tests ────────────────────────────────────────────
 
@@ -137,8 +137,8 @@ mod tests {
         let rh = result.unwrap();
         assert_eq!(rh.entries.len(), 1);
         assert_eq!(rh.entries[0].comp_id, comp_id);
-        assert_eq!(rh.entries[0].product_id, 1);   // high 16 of 0x00010002
-        assert_eq!(rh.entries[0].build_number, 2);  // low 16 of 0x00010002
+        assert_eq!(rh.entries[0].product_id, 1); // high 16 of 0x00010002
+        assert_eq!(rh.entries[0].build_number, 2); // low 16 of 0x00010002
         assert_eq!(rh.entries[0].count, count);
         // hash should be a valid 32-char hex md5
         assert_eq!(rh.hash.len(), 32);
@@ -177,7 +177,10 @@ mod tests {
 
         let sigs: ExternalSigs = serde_json::from_str(json).unwrap();
         assert_eq!(sigs.antidebug_imports.as_ref().unwrap().len(), 1);
-        assert_eq!(sigs.antidebug_imports.as_ref().unwrap()[0].name, "NtQueryInformationProcess");
+        assert_eq!(
+            sigs.antidebug_imports.as_ref().unwrap()[0].name,
+            "NtQueryInformationProcess"
+        );
         assert!(sigs.antidebug_strings.is_none());
         assert!(sigs.anticheat_imports.as_ref().unwrap().is_empty());
         assert_eq!(sigs.anticheat_strings.as_ref().unwrap().len(), 1);
@@ -197,7 +200,7 @@ mod tests {
     #[test]
     fn test_external_sigs_scan_integration() {
         // external rules should actually produce hits when matched
-        use crate::sigs::{scan_antidebug, scan_anticheat};
+        use crate::sigs::scan_antidebug;
 
         let imports = vec![
             ("kernel32.dll".to_string(), "IsDebuggerPresent".to_string()),
@@ -224,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_detect_section_anomalies_packer_names() {
-        use crate::analyzer::{SectionInfo, detect_section_anomalies};
+        use crate::analyzer::{detect_section_anomalies, SectionInfo};
 
         let sections = vec![
             SectionInfo {
@@ -256,4 +259,3 @@ mod tests {
         assert!(warnings[2].contains(".data"));
     }
 }
-

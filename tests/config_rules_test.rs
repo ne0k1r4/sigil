@@ -1,5 +1,4 @@
-/// Tests for the new config-driven features: user config file (~/.sigil.toml),
-/// custom signature rule engine, and imphash clustering.
+// Tests for the config-driven user settings, custom signature rules, and imphash clustering.
 
 // ── user config ──────────────────────────────────────────────────────────────
 
@@ -36,7 +35,10 @@ description = "Internal threat intel hash"
         assert_eq!(cfg.antidebug_imports.len(), 1);
         assert_eq!(cfg.antidebug_imports[0].pattern, "MyDebugCheck");
         assert_eq!(cfg.anticheat_strings.len(), 1);
-        assert_eq!(cfg.known_imphashes[0].pattern, "deadbeefdeadbeefdeadbeefdeadbeef");
+        assert_eq!(
+            cfg.known_imphashes[0].pattern,
+            "deadbeefdeadbeefdeadbeefdeadbeef"
+        );
     }
 
     #[test]
@@ -108,13 +110,16 @@ hex_pattern = "ZZ ZZ"
         let rf: RuleFile = toml::from_str(toml_str).unwrap();
         let data = vec![0x00, 0x01];
         let hits = scan_rules(&rf, &data, &[]);
-        assert!(hits.is_empty(), "invalid pattern should produce no hits, not panic");
+        assert!(
+            hits.is_empty(),
+            "invalid pattern should produce no hits, not panic"
+        );
     }
 
     #[test]
     fn empty_rules_produce_no_hits() {
         let rf = RuleFile::default();
-        let hits = scan_rules(&rf, &[1,2,3], &["hello".to_string()]);
+        let hits = scan_rules(&rf, &[1, 2, 3], &["hello".to_string()]);
         assert!(hits.is_empty());
     }
 }

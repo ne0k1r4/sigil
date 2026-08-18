@@ -167,17 +167,23 @@ impl VersionInfo {
 // ── little-endian byte readers ─────────────────────────────────────────────
 
 fn r16le(data: &[u8], off: usize) -> u16 {
-    if off + 2 > data.len() { return 0; }
+    if off + 2 > data.len() {
+        return 0;
+    }
     u16::from_le_bytes([data[off], data[off + 1]])
 }
 
 fn r32le(data: &[u8], off: usize) -> u32 {
-    if off + 4 > data.len() { return 0; }
+    if off + 4 > data.len() {
+        return 0;
+    }
     u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
 }
 
 fn r64le(data: &[u8], off: usize) -> u64 {
-    if off + 8 > data.len() { return 0; }
+    if off + 8 > data.len() {
+        return 0;
+    }
     let mut b = [0u8; 8];
     b.copy_from_slice(&data[off..off + 8]);
     u64::from_le_bytes(b)
@@ -186,8 +192,7 @@ fn r64le(data: &[u8], off: usize) -> u64 {
 /// Read and validate a binary file.
 /// Set `no_size_limit = true` to bypass the 256 MB cap (e.g. for large firmware blobs).
 pub fn read_file(path: &str, no_size_limit: bool) -> Result<Vec<u8>> {
-    let meta = fs::metadata(path)
-        .with_context(|| format!("cannot stat '{}'", path))?;
+    let meta = fs::metadata(path).with_context(|| format!("cannot stat '{}'", path))?;
     if !no_size_limit && meta.len() > MAX_FILE_SIZE {
         anyhow::bail!(
             "file is {:.1} MB — exceeds the {:.0} MB safety cap; pass --no-size-limit to override",
@@ -199,7 +204,10 @@ pub fn read_file(path: &str, no_size_limit: bool) -> Result<Vec<u8>> {
 }
 
 /// Convert an RVA to a file offset using the PE section table.
-pub fn rva_to_offset(rva: u64, sections: &[goblin::pe::section_table::SectionTable]) -> Option<usize> {
+pub fn rva_to_offset(
+    rva: u64,
+    sections: &[goblin::pe::section_table::SectionTable],
+) -> Option<usize> {
     for s in sections {
         let va = s.virtual_address as u64;
         let size = (s.virtual_size as u64).max(s.size_of_raw_data as u64);
@@ -286,7 +294,12 @@ pub fn parse_rich_header(data: &[u8], lfanew: u32) -> Option<RichHeaderInfo> {
 ///
 /// Returns a list of callback VAs (empty if there is no TLS directory, or
 /// it has no callbacks).
-pub fn parse_tls_callbacks(data: &[u8], lfanew: u32, image_base: u64, sections: &[goblin::pe::section_table::SectionTable]) -> Vec<u64> {
+pub fn parse_tls_callbacks(
+    data: &[u8],
+    lfanew: u32,
+    image_base: u64,
+    sections: &[goblin::pe::section_table::SectionTable],
+) -> Vec<u64> {
     let mut callbacks = Vec::new();
     let lfanew = lfanew as usize;
 
@@ -336,7 +349,11 @@ pub fn parse_tls_callbacks(data: &[u8], lfanew: u32, image_base: u64, sections: 
         if off + ptr_size > data.len() {
             break;
         }
-        let cb = if ptr_size == 8 { r64le(data, off) } else { r32le(data, off) as u64 };
+        let cb = if ptr_size == 8 {
+            r64le(data, off)
+        } else {
+            r32le(data, off) as u64
+        };
         if cb == 0 {
             break;
         }
@@ -371,7 +388,10 @@ pub fn pe_data_directory(data: &[u8], lfanew: u32, index: usize) -> (u32, u32) {
 /// Compute info about any data appended after the last section ("overlay").
 /// Common for self-extracting archives, installers, and signed binaries
 /// (the Authenticode signature itself often lives in the overlay region).
-pub fn compute_overlay_info(data: &[u8], sections: &[goblin::pe::section_table::SectionTable]) -> Option<OverlayInfo> {
+pub fn compute_overlay_info(
+    data: &[u8],
+    sections: &[goblin::pe::section_table::SectionTable],
+) -> Option<OverlayInfo> {
     let mut last_end = 0usize;
     for s in sections {
         let end = s.pointer_to_raw_data as usize + s.size_of_raw_data as usize;
@@ -411,7 +431,9 @@ pub fn parse_authenticode(data: &[u8], lfanew: u32) -> Option<AuthenticodeInfo> 
     let cert_type = r16le(data, off + 6);
 
     let blob_start = (off + 8).min(data.len());
-    let blob_end = (off.saturating_add(dw_length)).min(data.len()).max(blob_start);
+    let blob_end = (off.saturating_add(dw_length))
+        .min(data.len())
+        .max(blob_start);
     let blob = &data[blob_start..blob_end];
 
     // DER-encoded X.509 fields (CN=, O=, etc.) appear as printable ASCII
@@ -432,8 +454,14 @@ pub fn parse_authenticode(data: &[u8], lfanew: u32) -> Option<AuthenticodeInfo> 
 }
 
 const VERSION_INFO_KEYS: &[&str] = &[
-    "CompanyName", "FileDescription", "FileVersion", "InternalName",
-    "LegalCopyright", "OriginalFilename", "ProductName", "ProductVersion",
+    "CompanyName",
+    "FileDescription",
+    "FileVersion",
+    "InternalName",
+    "LegalCopyright",
+    "OriginalFilename",
+    "ProductName",
+    "ProductVersion",
 ];
 
 /// Read a null-terminated UTF-16LE string starting at `start`, capped at
@@ -472,7 +500,7 @@ pub fn parse_version_info(blob: &[u8]) -> VersionInfo {
             let key_bytes: Vec<u8> = key.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
             if blob[i..].starts_with(&key_bytes) {
                 let mut j = i + key_bytes.len() + 2; // skip key + null terminator
-                while j % 4 != 0 && j < blob.len() {
+                while !j.is_multiple_of(4) && j < blob.len() {
                     j += 1; // 4-byte alignment padding
                 }
                 let val = read_utf16_string(blob, j);
@@ -670,7 +698,10 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
     let lfanew = pe.header.dos_header.pe_pointer;
     let callback_vas = parse_tls_callbacks(data, lfanew, pe.image_base as u64, &pe.sections);
     let tls_callbacks: Vec<String> = if !callback_vas.is_empty() {
-        callback_vas.iter().map(|va| format!("TLS callback at VA 0x{:x}", va)).collect()
+        callback_vas
+            .iter()
+            .map(|va| format!("TLS callback at VA 0x{:x}", va))
+            .collect()
     } else {
         pe.sections
             .iter()
@@ -697,12 +728,18 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
     if let Some(ov) = &overlay {
         headers.push((
             "Overlay".into(),
-            format!("{} bytes at 0x{:x} (entropy {:.2})", ov.size, ov.offset, ov.entropy),
+            format!(
+                "{} bytes at 0x{:x} (entropy {:.2})",
+                ov.size, ov.offset, ov.entropy
+            ),
         ));
     }
 
     let authenticode = parse_authenticode(data, lfanew);
-    headers.push(("Digitally Signed".into(), authenticode.is_some().to_string()));
+    headers.push((
+        "Digitally Signed".into(),
+        authenticode.is_some().to_string(),
+    ));
 
     let (version_info, icon_hashes) = parse_pe_resources(data, lfanew, &pe.sections);
     if let Some(vi) = &version_info {
@@ -738,12 +775,16 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
             headers.push(("Strong-Name Signed".into(), "YES".into()));
         }
         if !ci.obfuscator_hints.is_empty() {
-            headers.push(("Obfuscator Hints".into(),
-                format!("{} detected", ci.obfuscator_hints.len())));
+            headers.push((
+                "Obfuscator Hints".into(),
+                format!("{} detected", ci.obfuscator_hints.len()),
+            ));
         }
         if !ci.cheat_pattern_hits.is_empty() {
-            headers.push(("C# Cheat Patterns".into(),
-                format!("{} hit(s)", ci.cheat_pattern_hits.len())));
+            headers.push((
+                "C# Cheat Patterns".into(),
+                format!("{} hit(s)", ci.cheat_pattern_hits.len()),
+            ));
         }
     } else {
         headers.push(("Managed (.NET)".into(), "NO".into()));
@@ -752,7 +793,9 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
     // yo, parse the debug dir to grab the pdb path. it's kinda hidden but super useful
     let pdb_path = pe.debug_data.as_ref().and_then(|dd| {
         dd.codeview_pdb70_debug_info.as_ref().map(|pdb| {
-            String::from_utf8_lossy(pdb.filename).trim_matches('\0').to_string()
+            String::from_utf8_lossy(pdb.filename)
+                .trim_matches('\0')
+                .to_string()
         })
     });
     if let Some(ref path) = pdb_path {
@@ -856,11 +899,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         .iter()
         .filter(|s| !s.is_import() && s.st_value != 0)
         .map(|s| ExportEntry {
-            name: elf
-                .dynstrtab
-                .get_at(s.st_name)
-                .unwrap_or("??")
-                .to_string(),
+            name: elf.dynstrtab.get_at(s.st_name).unwrap_or("??").to_string(),
             rva: s.st_value,
             ordinal: None,
         })
@@ -871,11 +910,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         .iter()
         .filter(|s| s.st_value != 0)
         .map(|s| SymbolEntry {
-            name: elf
-                .strtab
-                .get_at(s.st_name)
-                .unwrap_or("??")
-                .to_string(),
+            name: elf.strtab.get_at(s.st_name).unwrap_or("??").to_string(),
             address: s.st_value,
             kind: sym_type_str(s.st_type()),
         })
@@ -890,11 +925,7 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
             let sz = s.sh_size as usize;
             let sec_data = data.get(off..off + sz).unwrap_or(&[]);
             SectionInfo {
-                name: elf
-                    .shdr_strtab
-                    .get_at(s.sh_name)
-                    .unwrap_or("")
-                    .to_string(),
+                name: elf.shdr_strtab.get_at(s.sh_name).unwrap_or("").to_string(),
                 size: sz as u64,
                 entropy: shannon_entropy(sec_data),
             }
@@ -932,15 +963,17 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
         }
     }
 
-    let elf_segments: Vec<ElfSegmentInfo> = elf.program_headers.iter().map(|ph| {
-        ElfSegmentInfo {
+    let elf_segments: Vec<ElfSegmentInfo> = elf
+        .program_headers
+        .iter()
+        .map(|ph| ElfSegmentInfo {
             segment_type: ph_type_to_str(ph.p_type),
             flags: ph_flags_to_str(ph.p_flags),
             vaddr: ph.p_vaddr,
             memsz: ph.p_memsz,
             filesz: ph.p_filesz,
-        }
-    }).collect();
+        })
+        .collect();
 
     let section_warnings = detect_section_anomalies(&sections);
 
@@ -1019,18 +1052,25 @@ pub fn extract_strings(data: &[u8], min_len: usize) -> Vec<String> {
     results
 }
 
-static RE_URL:  OnceLock<Regex> = OnceLock::new();
-static RE_IP:   OnceLock<Regex> = OnceLock::new();
-static RE_REG:  OnceLock<Regex> = OnceLock::new();
+static RE_URL: OnceLock<Regex> = OnceLock::new();
+static RE_IP: OnceLock<Regex> = OnceLock::new();
+static RE_REG: OnceLock<Regex> = OnceLock::new();
 static RE_PATH: OnceLock<Regex> = OnceLock::new();
 static RE_GUID: OnceLock<Regex> = OnceLock::new();
 
 pub fn categorize_strings(strings: &[String]) -> CategorizedStrings {
-    let url_re  = RE_URL.get_or_init(|| Regex::new(r"(?i)https?://[^\s]{4,}").unwrap());
-    let ip_re   = RE_IP.get_or_init(|| Regex::new(r"\b(\d{1,3}\.){3}\d{1,3}(:\d+)?\b").unwrap());
-    let reg_re  = RE_REG.get_or_init(|| Regex::new(r"(?i)(HKEY_|HKLM|HKCU|HKCR|SOFTWARE\\|SYSTEM\\)").unwrap());
-    let path_re = RE_PATH.get_or_init(|| Regex::new(r"(?i)([A-Za-z]:\\|/proc/|/sys/|/dev/|/etc/)").unwrap());
-    let guid_re = RE_GUID.get_or_init(|| Regex::new(r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}").unwrap());
+    let url_re = RE_URL.get_or_init(|| Regex::new(r"(?i)https?://[^\s]{4,}").unwrap());
+    let ip_re = RE_IP.get_or_init(|| Regex::new(r"\b(\d{1,3}\.){3}\d{1,3}(:\d+)?\b").unwrap());
+    let reg_re = RE_REG
+        .get_or_init(|| Regex::new(r"(?i)(HKEY_|HKLM|HKCU|HKCR|SOFTWARE\\|SYSTEM\\)").unwrap());
+    let path_re =
+        RE_PATH.get_or_init(|| Regex::new(r"(?i)([A-Za-z]:\\|/proc/|/sys/|/dev/|/etc/)").unwrap());
+    let guid_re = RE_GUID.get_or_init(|| {
+        Regex::new(
+            r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}",
+        )
+        .unwrap()
+    });
 
     let mut cats = CategorizedStrings {
         urls: vec![],
@@ -1074,14 +1114,12 @@ pub fn pattern_search(data: &[u8], pattern: &str) -> Result<Vec<usize>> {
         .iter()
         .map(|t| match *t {
             "??" | "?" => Ok(None),
-            t => u8::from_str_radix(t, 16)
-                .map(Some)
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "invalid hex token '{}' — expected XX or ?? (e.g. '48 8B ?? ??')",
-                        t
-                    )
-                }),
+            t => u8::from_str_radix(t, 16).map(Some).map_err(|_| {
+                anyhow::anyhow!(
+                    "invalid hex token '{}' — expected XX or ?? (e.g. '48 8B ?? ??')",
+                    t
+                )
+            }),
         })
         .collect::<Result<_>>()?;
 
@@ -1216,21 +1254,27 @@ pub fn packing_verdict(entropy: f64) -> &'static str {
 pub fn detect_section_anomalies(sections: &[SectionInfo]) -> Vec<String> {
     let mut warnings = Vec::new();
     let sus_names = [
-        "upx", "aspack", "pecmp", "fsg", "yoda", "themida", "vmp", "saferg",
-        "pack", "crypt", "crpt", "protect"
+        "upx", "aspack", "pecmp", "fsg", "yoda", "themida", "vmp", "saferg", "pack", "crypt",
+        "crpt", "protect",
     ];
     for s in sections {
         let name_lower = s.name.to_lowercase();
         // check if name is sus
         for &sus in &sus_names {
             if name_lower.contains(sus) {
-                warnings.push(format!("suspicious section name '{}' (possible packer/protector)", s.name));
+                warnings.push(format!(
+                    "suspicious section name '{}' (possible packer/protector)",
+                    s.name
+                ));
                 break;
             }
         }
         // check for high entropy (potential encrypted/packed payload)
         if s.entropy > 7.9 && s.size > 1024 {
-            warnings.push(format!("section '{}' has crazy high entropy ({:.3}) - probably packed/encrypted", s.name, s.entropy));
+            warnings.push(format!(
+                "section '{}' has crazy high entropy ({:.3}) - probably packed/encrypted",
+                s.name, s.entropy
+            ));
         }
     }
     warnings

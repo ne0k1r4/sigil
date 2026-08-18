@@ -9,7 +9,6 @@
 ///
 /// Everything here is pure static parsing — no JIT, no execution. The same
 /// approach used by dnSpy, ILSpy, Mono.Cecil, and ILDASM.
-
 use crate::analyzer::{pe_data_directory, rva_to_offset};
 use goblin::pe::section_table::SectionTable;
 use serde::{Deserialize, Serialize};
@@ -92,12 +91,16 @@ pub struct CheatHit {
 
 #[inline]
 fn r16(b: &[u8], o: usize) -> u16 {
-    if o + 2 > b.len() { return 0; }
+    if o + 2 > b.len() {
+        return 0;
+    }
     u16::from_le_bytes([b[o], b[o + 1]])
 }
 #[inline]
 fn r32(b: &[u8], o: usize) -> u32 {
-    if o + 4 > b.len() { return 0; }
+    if o + 4 > b.len() {
+        return 0;
+    }
     u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
 }
 
@@ -108,7 +111,9 @@ fn r32(b: &[u8], o: usize) -> u32 {
 /// The first three components are little-endian; the last two are big-endian,
 /// matching how CLR stores MVIDs.
 fn format_guid(b: &[u8]) -> String {
-    if b.len() < 16 { return "(invalid guid)".into(); }
+    if b.len() < 16 {
+        return "(invalid guid)".into();
+    }
     format!(
         "{{{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
         b[3], b[2], b[1], b[0],   // Data1 LE
@@ -124,14 +129,30 @@ fn format_guid(b: &[u8]) -> String {
 /// Decode IMAGE_COR20_HEADER.Flags into human-readable strings.
 fn decode_clr_flags(flags: u32) -> Vec<String> {
     let mut out = Vec::new();
-    if flags & 0x01 != 0 { out.push("ILONLY".into()); }
-    if flags & 0x02 != 0 { out.push("32BITREQUIRED".into()); }
-    if flags & 0x04 != 0 { out.push("IL_LIBRARY".into()); }
-    if flags & 0x08 != 0 { out.push("STRONGNAMESIGNED".into()); }
-    if flags & 0x10 != 0 { out.push("NATIVEENTRYPOINT".into()); }
-    if flags & 0x20000 != 0 { out.push("TRACKDEBUGDATA".into()); }
-    if flags & 0x00100000 != 0 { out.push("PREFER32BIT".into()); }
-    if out.is_empty() { out.push("(none)".into()); }
+    if flags & 0x01 != 0 {
+        out.push("ILONLY".into());
+    }
+    if flags & 0x02 != 0 {
+        out.push("32BITREQUIRED".into());
+    }
+    if flags & 0x04 != 0 {
+        out.push("IL_LIBRARY".into());
+    }
+    if flags & 0x08 != 0 {
+        out.push("STRONGNAMESIGNED".into());
+    }
+    if flags & 0x10 != 0 {
+        out.push("NATIVEENTRYPOINT".into());
+    }
+    if flags & 0x20000 != 0 {
+        out.push("TRACKDEBUGDATA".into());
+    }
+    if flags & 0x00100000 != 0 {
+        out.push("PREFER32BIT".into());
+    }
+    if out.is_empty() {
+        out.push("(none)".into());
+    }
     out
 }
 
@@ -161,20 +182,26 @@ fn find_metadata_streams<'a>(md: &'a [u8]) -> Option<MetadataStreams<'a>> {
     let ver_len = r32(md, 12) as usize;
     let after_ver = 16 + ver_len;
     // 2-byte flags at after_ver, then 2-byte stream count
-    if after_ver + 4 > md.len() { return None; }
+    if after_ver + 4 > md.len() {
+        return None;
+    }
     let stream_count = r16(md, after_ver + 2) as usize;
-    if stream_count > 64 { return None; } // sanity guard
+    if stream_count > 64 {
+        return None;
+    } // sanity guard
 
     let mut strings: &[u8] = &[];
-    let mut guid:    &[u8] = &[];
-    let mut tables:  &[u8] = &[];
+    let mut guid: &[u8] = &[];
+    let mut tables: &[u8] = &[];
 
     // Stream headers start immediately after the stream count field.
     let mut p = after_ver + 4;
     for _ in 0..stream_count {
-        if p + 8 > md.len() { break; }
+        if p + 8 > md.len() {
+            break;
+        }
         let offset = r32(md, p) as usize;
-        let size   = r32(md, p + 4) as usize;
+        let size = r32(md, p + 4) as usize;
         // Stream name: null-terminated, 4-byte aligned
         let name_start = p + 8;
         let mut name_end = name_start;
@@ -186,26 +213,36 @@ fn find_metadata_streams<'a>(md: &'a [u8]) -> Option<MetadataStreams<'a>> {
         let raw_next = name_end + 1;
         p = (raw_next + 3) & !3;
 
-        if offset > md.len() || offset + size > md.len() { continue; }
+        if offset > md.len() || offset + size > md.len() {
+            continue;
+        }
         let stream_data = &md[offset..offset + size];
 
         match name {
             "#Strings" => strings = stream_data,
-            "#GUID"    => guid    = stream_data,
+            "#GUID" => guid = stream_data,
             "#~" | "#-" => tables = stream_data,
             _ => {}
         }
     }
 
-    Some(MetadataStreams { strings, guid, tables })
+    Some(MetadataStreams {
+        strings,
+        guid,
+        tables,
+    })
 }
 
 /// Read a null-terminated UTF-8 string from the #Strings heap at the given
 /// offset. Returns an empty string if the offset is out of range or the
 /// heap is empty.
 fn strings_at(heap: &[u8], offset: usize) -> &str {
-    if offset >= heap.len() { return ""; }
-    let end = heap[offset..].iter().position(|&b| b == 0)
+    if offset >= heap.len() {
+        return "";
+    }
+    let end = heap[offset..]
+        .iter()
+        .position(|&b| b == 0)
         .map(|n| offset + n)
         .unwrap_or(heap.len());
     std::str::from_utf8(&heap[offset..end]).unwrap_or("")
@@ -222,16 +259,16 @@ fn strings_at(heap: &[u8], offset: usize) -> &str {
 /// heap; clear = 2-byte index).
 struct ColWidths {
     string: usize,
-    guid:   usize,
-    blob:   usize,
+    guid: usize,
+    blob: usize,
 }
 
 impl ColWidths {
     fn from_heap_sizes(heap_sizes: u8) -> Self {
         ColWidths {
             string: if heap_sizes & 0x01 != 0 { 4 } else { 2 },
-            guid:   if heap_sizes & 0x02 != 0 { 4 } else { 2 },
-            blob:   if heap_sizes & 0x04 != 0 { 4 } else { 2 },
+            guid: if heap_sizes & 0x02 != 0 { 4 } else { 2 },
+            blob: if heap_sizes & 0x04 != 0 { 4 } else { 2 },
         }
     }
 }
@@ -245,11 +282,18 @@ fn read_index(data: &[u8], off: usize, width: usize) -> usize {
 }
 
 // ── metadata table IDs (ECMA-335 §II.22) ─────────────────────────────────────
-const TBL_MODULE:          usize = 0x00;
-const TBL_TYPEREF:         usize = 0x01;
-const TBL_TYPEDEF:         usize = 0x02;
-const TBL_ASSEMBLY:        usize = 0x20;
-const TBL_CUSTOMATTRIBUTE: usize = 0x0C;
+const TBL_MODULE: usize = 0x00;
+const TBL_TYPEREF: usize = 0x01;
+const TBL_TYPEDEF: usize = 0x02;
+const TBL_ASSEMBLY: usize = 0x20;
+
+type DecodedTables = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Vec<(String, String)>,
+);
 
 /// Parse the #~ stream tables header and extract the information we need.
 ///
@@ -258,18 +302,10 @@ const TBL_CUSTOMATTRIBUTE: usize = 0x0C;
 /// - MVID GUID index from the Module table
 /// - type/namespace pairs from the TypeDef table (capped at 512)
 /// - CustomAttribute raw type references for obfuscator/cheat scanning
-fn decode_tables(
-    tables: &[u8],
-    strings: &[u8],
-    guid: &[u8],
-) -> Option<(
-    Option<String>,   // assembly name
-    Option<String>,   // version
-    Option<String>,   // culture
-    Option<String>,   // mvid
-    Vec<(String, String)>, // (namespace, typename)
-)> {
-    if tables.len() < 24 { return None; }
+fn decode_tables(tables: &[u8], strings: &[u8], guid: &[u8]) -> Option<DecodedTables> {
+    if tables.len() < 24 {
+        return None;
+    }
 
     let heap_sizes = tables[6];
     let cw = ColWidths::from_heap_sizes(heap_sizes);
@@ -282,30 +318,42 @@ fn decode_tables(
     // Row counts: one u32 per set bit in valid, starting at offset 24
     let mut row_counts = [0u32; 64];
     let mut p = 24usize;
-    for i in 0..64usize {
+    for (i, row_count) in row_counts.iter_mut().enumerate() {
         if valid & (1u64 << i) != 0 {
-            if p + 4 > tables.len() { return None; }
-            row_counts[i] = r32(tables, p);
+            if p + 4 > tables.len() {
+                return None;
+            }
+            *row_count = r32(tables, p);
             p += 4;
         }
     }
 
     // Helper: table index width — 2 bytes if ≤ 0xFFFF rows, else 4
     let tidx = |tbl: usize| -> usize {
-        if row_counts[tbl] > 0xFFFF { 4 } else { 2 }
+        if row_counts[tbl] > 0xFFFF {
+            4
+        } else {
+            2
+        }
     };
 
     // ── Module table (TBL_MODULE = 0x00) ─────────────────────────────────────
     // Layout: Generation(u16) | Name(String) | Mvid(Guid) | EncId(Guid) | EncBaseId(Guid)
     let module_base = p;
-    let mvid = if valid & (1 << TBL_MODULE) != 0 && module_base + 2 + cw.string + cw.guid <= tables.len() {
+    let mvid = if valid & (1 << TBL_MODULE) != 0
+        && module_base + 2 + cw.string + cw.guid <= tables.len()
+    {
         let guid_idx = read_index(tables, module_base + 2 + cw.string, cw.guid);
         // GUID heap stores packed 16-byte GUIDs; index is 1-based
         let guid_off = guid_idx.saturating_sub(1) * 16;
         if guid_off + 16 <= guid.len() {
             Some(format_guid(&guid[guid_off..guid_off + 16]))
-        } else { None }
-    } else { None };
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     // Advance past the Module table rows to reach the next table
     let module_row_sz = 2 + cw.string + cw.guid * 3;
@@ -322,8 +370,16 @@ fn decode_tables(
         row_counts[0x1A] as usize, // ModuleRef
         row_counts[0x23] as usize, // AssemblyRef
         row_counts[TBL_TYPEREF] as usize,
-    ].iter().copied().max().unwrap_or(0);
-    let resolution_scope_w = if resolution_scope_max > (0xFFFF >> 2) { 4 } else { 2 };
+    ]
+    .iter()
+    .copied()
+    .max()
+    .unwrap_or(0);
+    let resolution_scope_w = if resolution_scope_max > (0xFFFF >> 2) {
+        4
+    } else {
+        2
+    };
     let typeref_row_sz = resolution_scope_w + cw.string * 2;
     let typeref_rows = row_counts[TBL_TYPEREF] as usize;
     p += typeref_rows * typeref_row_sz;
@@ -338,10 +394,14 @@ fn decode_tables(
         row_counts[TBL_TYPEDEF] as usize,
         row_counts[TBL_TYPEREF] as usize,
         row_counts[0x1B] as usize, // TypeSpec
-    ].iter().copied().max().unwrap_or(0);
+    ]
+    .iter()
+    .copied()
+    .max()
+    .unwrap_or(0);
     let extends_w = if extends_max > (0xFFFF >> 2) { 4 } else { 2 };
     // FieldList and MethodList are simple table indices into Field/Method tables
-    let field_list_w  = tidx(0x04); // Field table
+    let field_list_w = tidx(0x04); // Field table
     let method_list_w = tidx(0x06); // MethodDef table
     let typedef_row_sz = 4 + cw.string * 2 + extends_w + field_list_w + method_list_w;
     let typedef_rows = (row_counts[TBL_TYPEDEF] as usize).min(512);
@@ -349,11 +409,13 @@ fn decode_tables(
     let mut types: Vec<(String, String)> = Vec::with_capacity(typedef_rows);
     for i in 0..typedef_rows {
         let row_off = typedef_base + i * typedef_row_sz;
-        if row_off + 4 + cw.string * 2 > tables.len() { break; }
+        if row_off + 4 + cw.string * 2 > tables.len() {
+            break;
+        }
         let name_idx = read_index(tables, row_off + 4, cw.string);
-        let ns_idx   = read_index(tables, row_off + 4 + cw.string, cw.string);
+        let ns_idx = read_index(tables, row_off + 4 + cw.string, cw.string);
         let type_name = strings_at(strings, name_idx).to_string();
-        let type_ns   = strings_at(strings, ns_idx).to_string();
+        let type_ns = strings_at(strings, ns_idx).to_string();
         if !type_name.is_empty() {
             types.push((type_ns, type_name));
         }
@@ -406,11 +468,16 @@ fn decode_tables(
     // This may cause us to overshoot on small assemblies; we guard with a
     // bounds check and fall back to None.
 
-    let type_or_method_def_max = [
-        row_counts[TBL_TYPEDEF] as usize,
-        row_counts[0x06] as usize,
-    ].iter().copied().max().unwrap_or(0);
-    let has_this_w = if type_or_method_def_max > (0xFFFF >> 2) { 4 } else { 2 };
+    let type_or_method_def_max = [row_counts[TBL_TYPEDEF] as usize, row_counts[0x06] as usize]
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0);
+    let has_this_w = if type_or_method_def_max > (0xFFFF >> 2) {
+        4
+    } else {
+        2
+    };
 
     let member_ref_parent_max = [
         row_counts[TBL_TYPEDEF] as usize,
@@ -418,56 +485,91 @@ fn decode_tables(
         row_counts[0x1A] as usize,
         row_counts[0x06] as usize,
         row_counts[0x1B] as usize,
-    ].iter().copied().max().unwrap_or(0);
-    let member_ref_parent_w = if member_ref_parent_max > (0xFFFF >> 3) { 4 } else { 2 };
+    ]
+    .iter()
+    .copied()
+    .max()
+    .unwrap_or(0);
+    let member_ref_parent_w = if member_ref_parent_max > (0xFFFF >> 3) {
+        4
+    } else {
+        2
+    };
 
     let has_custom_attr_max = [
-        row_counts[0x06] as usize, row_counts[0x04] as usize, row_counts[0x01] as usize,
-        row_counts[0x08] as usize, row_counts[0x17] as usize, row_counts[0x14] as usize,
-        row_counts[0x19] as usize, row_counts[0x00] as usize, row_counts[0x0A] as usize,
-        row_counts[0x09] as usize, row_counts[0x0E] as usize, row_counts[0x11] as usize,
-        row_counts[0x02] as usize, row_counts[0x1A] as usize, row_counts[0x10] as usize,
-        row_counts[0x1B] as usize, row_counts[0x0C] as usize, row_counts[0x0D] as usize,
-        row_counts[0x1D] as usize, row_counts[0x1E] as usize, row_counts[0x1F] as usize,
-        row_counts[0x20] as usize,
-    ].iter().copied().max().unwrap_or(0);
-    let has_custom_attr_w = if has_custom_attr_max > (0xFFFF >> 5) { 4 } else { 2 };
-
-    let custom_attr_type_max = [
         row_counts[0x06] as usize,
+        row_counts[0x04] as usize,
+        row_counts[0x01] as usize,
+        row_counts[0x08] as usize,
+        row_counts[0x17] as usize,
+        row_counts[0x14] as usize,
+        row_counts[0x19] as usize,
+        row_counts[0x00] as usize,
         row_counts[0x0A] as usize,
-    ].iter().copied().max().unwrap_or(0);
-    let custom_attr_type_w = if custom_attr_type_max > (0xFFFF >> 3) { 4 } else { 2 };
+        row_counts[0x09] as usize,
+        row_counts[0x0E] as usize,
+        row_counts[0x11] as usize,
+        row_counts[0x02] as usize,
+        row_counts[0x1A] as usize,
+        row_counts[0x10] as usize,
+        row_counts[0x1B] as usize,
+        row_counts[0x0C] as usize,
+        row_counts[0x0D] as usize,
+        row_counts[0x1D] as usize,
+        row_counts[0x1E] as usize,
+        row_counts[0x1F] as usize,
+        row_counts[0x20] as usize,
+    ]
+    .iter()
+    .copied()
+    .max()
+    .unwrap_or(0);
+    let has_custom_attr_w = if has_custom_attr_max > (0xFFFF >> 5) {
+        4
+    } else {
+        2
+    };
+
+    let custom_attr_type_max = [row_counts[0x06] as usize, row_counts[0x0A] as usize]
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0);
+    let custom_attr_type_w = if custom_attr_type_max > (0xFFFF >> 3) {
+        4
+    } else {
+        2
+    };
 
     // Table sizes for 4–31:
     let intermediate_skips: &[(usize, usize)] = &[
         // (table_id, row_size)
-        (0x04, cw.blob),                                                   // Field: Flags+Name+Sig
-        (0x06, 4 + 4 + 2 + 2 + 2 + cw.string + cw.blob),                // MethodDef
-        (0x08, 2 + 2 + 2 + cw.string),                                   // Param
-        (0x09, has_this_w + 2),                                           // InterfaceImpl
-        (0x0A, member_ref_parent_w + cw.string + cw.blob),               // MemberRef
-        (0x0B, 2 + has_this_w + cw.blob),                                // Constant
-        (0x0C, has_custom_attr_w + custom_attr_type_w + cw.blob),        // CustomAttribute
-        (0x0D, has_this_w + cw.blob),                                    // FieldMarshal
-        (0x0E, 2 + has_this_w + cw.blob),                                // DeclSecurity
-        (0x0F, 4 + 2 + tidx(0x02)),                                      // ClassLayout
-        (0x10, 4 + tidx(0x04)),                                          // FieldLayout
-        (0x11, cw.blob),                                                  // StandAloneSig
-        (0x12, tidx(0x02) + tidx(0x14)),                                 // EventMap
-        (0x13, 0),                                                        // EventPtr (skipped)
-        (0x14, 2 + cw.string + 2),                                       // Event
-        (0x15, tidx(0x02) + tidx(0x17)),                                 // PropertyMap
-        (0x16, 0),                                                        // PropertyPtr (skipped)
-        (0x17, 2 + cw.string + cw.blob),                                 // Property
-        (0x18, 2 + 2 + tidx(0x06)),                                      // MethodSemantics
-        (0x19, tidx(0x06) + tidx(0x06) + tidx(0x02)),                   // MethodImpl
-        (0x1A, cw.string),                                               // ModuleRef
-        (0x1B, cw.blob),                                                  // TypeSpec
-        (0x1C, 2 + tidx(0x06) + 2 + cw.string + cw.string),             // ImplMap
-        (0x1D, 4 + tidx(0x04)),                                          // FieldRVA
-        (0x1E, 0),                                                        // ENCLog (skipped)
-        (0x1F, 0),                                                        // ENCMap (skipped)
+        (0x04, cw.blob),                                   // Field: Flags+Name+Sig
+        (0x06, 4 + 4 + 2 + 2 + 2 + cw.string + cw.blob),   // MethodDef
+        (0x08, 2 + 2 + 2 + cw.string),                     // Param
+        (0x09, has_this_w + 2),                            // InterfaceImpl
+        (0x0A, member_ref_parent_w + cw.string + cw.blob), // MemberRef
+        (0x0B, 2 + has_this_w + cw.blob),                  // Constant
+        (0x0C, has_custom_attr_w + custom_attr_type_w + cw.blob), // CustomAttribute
+        (0x0D, has_this_w + cw.blob),                      // FieldMarshal
+        (0x0E, 2 + has_this_w + cw.blob),                  // DeclSecurity
+        (0x0F, 4 + 2 + tidx(0x02)),                        // ClassLayout
+        (0x10, 4 + tidx(0x04)),                            // FieldLayout
+        (0x11, cw.blob),                                   // StandAloneSig
+        (0x12, tidx(0x02) + tidx(0x14)),                   // EventMap
+        (0x13, 0),                                         // EventPtr (skipped)
+        (0x14, 2 + cw.string + 2),                         // Event
+        (0x15, tidx(0x02) + tidx(0x17)),                   // PropertyMap
+        (0x16, 0),                                         // PropertyPtr (skipped)
+        (0x17, 2 + cw.string + cw.blob),                   // Property
+        (0x18, 2 + 2 + tidx(0x06)),                        // MethodSemantics
+        (0x19, tidx(0x06) + tidx(0x06) + tidx(0x02)),      // MethodImpl
+        (0x1A, cw.string),                                 // ModuleRef
+        (0x1B, cw.blob),                                   // TypeSpec
+        (0x1C, 2 + tidx(0x06) + 2 + cw.string + cw.string), // ImplMap
+        (0x1D, 4 + tidx(0x04)),                            // FieldRVA
+        (0x1E, 0),                                         // ENCLog (skipped)
+        (0x1F, 0),                                         // ENCMap (skipped)
     ];
 
     for &(tbl, row_sz) in intermediate_skips {
@@ -493,10 +595,10 @@ fn decode_tables(
         return Some((None, None, None, mvid, types));
     }
 
-    let major  = r16(tables, assembly_base + 4);
-    let minor  = r16(tables, assembly_base + 6);
-    let build  = r16(tables, assembly_base + 8);
-    let rev    = r16(tables, assembly_base + 10);
+    let major = r16(tables, assembly_base + 4);
+    let minor = r16(tables, assembly_base + 6);
+    let build = r16(tables, assembly_base + 8);
+    let rev = r16(tables, assembly_base + 10);
     let version = Some(format!("{}.{}.{}.{}", major, minor, build, rev));
 
     // Skip HashAlgId(4) + version fields(8) + Flags(4) + PublicKey(blob)
@@ -504,13 +606,21 @@ fn decode_tables(
     let name_idx = read_index(tables, name_off, cw.string);
     let asm_name = {
         let n = strings_at(strings, name_idx).to_string();
-        if n.is_empty() { None } else { Some(n) }
+        if n.is_empty() {
+            None
+        } else {
+            Some(n)
+        }
     };
 
     let culture_off = name_off + cw.string;
     let culture_idx = read_index(tables, culture_off, cw.string);
     let culture_str = strings_at(strings, culture_idx);
-    let culture = Some(if culture_str.is_empty() { "neutral".to_string() } else { culture_str.to_string() });
+    let culture = Some(if culture_str.is_empty() {
+        "neutral".to_string()
+    } else {
+        culture_str.to_string()
+    });
 
     Some((asm_name, version, culture, mvid, types))
 }
@@ -522,26 +632,26 @@ fn decode_tables(
 /// attributes or leaves residual scaffolding. Source: public obfuscator
 /// documentation and public .NET obfuscation research.
 static OBFUSCATOR_PATTERNS: &[(&str, &str)] = &[
-    ("ConfuserEx",         "ConfuserEx marker namespace or type"),
-    ("Confuser",           "Confuser / ConfuserEx residual"),
+    ("ConfuserEx", "ConfuserEx marker namespace or type"),
+    ("Confuser", "Confuser / ConfuserEx residual"),
     ("ConfuserExProtections", "ConfuserEx protection attribute"),
-    ("Obfuscar",           "Obfuscar obfuscation marker"),
-    ("SmartAssembly",      "SmartAssembly by Redgate"),
-    ("Eazfuscator",        "Eazfuscator.NET marker"),
-    ("Dotfuscator",        "Dotfuscator by PreEmptive Solutions"),
-    ("CliSecure",          "CliSecure / SecureTeam obfuscator"),
-    ("Babel",              "Babel Obfuscator"),
-    ("DeepSea",            "DeepSea Obfuscator"),
-    ("Skater",             "Skater .NET Obfuscator"),
-    ("MaxtoCode",          "MaxtoCode protector"),
-    ("NetReactor",         "Eziriz .NET Reactor"),
-    ("NetShrink",          ".Net Shrink packer"),
-    ("Crypto",             "Crypto Obfuscator"),
-    ("ILProtector",        "ILProtector by Niklas Weinder"),
-    ("MindFusion",         "MindFusion obfuscation scaffold"),
-    ("Agile.NET",          "Agile.NET (formerly CryptoObfuscator)"),
-    ("Themida",            "Themida / WinLicense .NET protection"),
-    ("Phoenix",            "Phoenix Protector"),
+    ("Obfuscar", "Obfuscar obfuscation marker"),
+    ("SmartAssembly", "SmartAssembly by Redgate"),
+    ("Eazfuscator", "Eazfuscator.NET marker"),
+    ("Dotfuscator", "Dotfuscator by PreEmptive Solutions"),
+    ("CliSecure", "CliSecure / SecureTeam obfuscator"),
+    ("Babel", "Babel Obfuscator"),
+    ("DeepSea", "DeepSea Obfuscator"),
+    ("Skater", "Skater .NET Obfuscator"),
+    ("MaxtoCode", "MaxtoCode protector"),
+    ("NetReactor", "Eziriz .NET Reactor"),
+    ("NetShrink", ".Net Shrink packer"),
+    ("Crypto", "Crypto Obfuscator"),
+    ("ILProtector", "ILProtector by Niklas Weinder"),
+    ("MindFusion", "MindFusion obfuscation scaffold"),
+    ("Agile.NET", "Agile.NET (formerly CryptoObfuscator)"),
+    ("Themida", "Themida / WinLicense .NET protection"),
+    ("Phoenix", "Phoenix Protector"),
 ];
 
 /// Known C# cheat / game-hack namespace and type patterns.
@@ -551,48 +661,126 @@ static OBFUSCATOR_PATTERNS: &[(&str, &str)] = &[
 /// and published malware analysis reports — no NDA-covered sources.
 static CHEAT_PATTERNS: &[(&str, &str, &str)] = &[
     // Process memory reading helpers (the bread and butter of external cheats)
-    ("Memory",     "ReadProcessMemory",  "Memory reading class or method — common in external cheat frameworks"),
-    ("Hack",       "ReadMemory",         "Generic 'Hack' namespace with memory-read method pattern"),
-    ("Cheat",      "",                   "Top-level 'Cheat' namespace — common in public cheat templates"),
-    ("ESP",        "",                   "ESP (Extra Sensory Perception) namespace — wallhack/overlay pattern"),
-    ("Aimbot",     "",                   "'Aimbot' namespace — auto-aim module"),
-    ("Triggerbot", "",                   "'Triggerbot' namespace — auto-fire module"),
-    ("Bhop",       "",                   "'Bhop' (bunny-hop) namespace — movement exploit"),
-    ("SpeedHack",  "",                   "'SpeedHack' namespace — game speed manipulation"),
-    ("NoRecoil",   "",                   "'NoRecoil' namespace — recoil suppression"),
-    ("WallHack",   "",                   "'WallHack' namespace — geometry penetration exploit"),
-    ("Radar",      "CheatRadar",         "Radar cheat — map-hack / minimap ESP"),
-    ("Inject",     "InjectDLL",          "DLL injection helper class"),
-    ("UnityHack",  "",                   "Unity engine hack namespace"),
-    ("Il2Cpp",     "Il2CppDumper",       "IL2CPP metadata dumper — used to reverse Unity IL2CPP games"),
-    ("MonoHook",   "",                   "Mono/.NET runtime hook namespace"),
-    ("GameHack",   "",                   "Generic 'GameHack' namespace"),
-    ("CheatEngine","",                   "CheatEngine-related namespace"),
-    ("Payload",    "Loader",             "Payload loader class — common in dropper/injector patterns"),
-    ("Injector",   "",                   "Injector namespace — DLL/shellcode injection"),
-    ("RWX",        "",                   "RWX (read-write-execute) memory namespace — shellcode staging"),
+    (
+        "Memory",
+        "ReadProcessMemory",
+        "Memory reading class or method — common in external cheat frameworks",
+    ),
+    (
+        "Hack",
+        "ReadMemory",
+        "Generic 'Hack' namespace with memory-read method pattern",
+    ),
+    (
+        "Cheat",
+        "",
+        "Top-level 'Cheat' namespace — common in public cheat templates",
+    ),
+    (
+        "ESP",
+        "",
+        "ESP (Extra Sensory Perception) namespace — wallhack/overlay pattern",
+    ),
+    ("Aimbot", "", "'Aimbot' namespace — auto-aim module"),
+    (
+        "Triggerbot",
+        "",
+        "'Triggerbot' namespace — auto-fire module",
+    ),
+    (
+        "Bhop",
+        "",
+        "'Bhop' (bunny-hop) namespace — movement exploit",
+    ),
+    (
+        "SpeedHack",
+        "",
+        "'SpeedHack' namespace — game speed manipulation",
+    ),
+    ("NoRecoil", "", "'NoRecoil' namespace — recoil suppression"),
+    (
+        "WallHack",
+        "",
+        "'WallHack' namespace — geometry penetration exploit",
+    ),
+    (
+        "Radar",
+        "CheatRadar",
+        "Radar cheat — map-hack / minimap ESP",
+    ),
+    ("Inject", "InjectDLL", "DLL injection helper class"),
+    ("UnityHack", "", "Unity engine hack namespace"),
+    (
+        "Il2Cpp",
+        "Il2CppDumper",
+        "IL2CPP metadata dumper — used to reverse Unity IL2CPP games",
+    ),
+    ("MonoHook", "", "Mono/.NET runtime hook namespace"),
+    ("GameHack", "", "Generic 'GameHack' namespace"),
+    ("CheatEngine", "", "CheatEngine-related namespace"),
+    (
+        "Payload",
+        "Loader",
+        "Payload loader class — common in dropper/injector patterns",
+    ),
+    (
+        "Injector",
+        "",
+        "Injector namespace — DLL/shellcode injection",
+    ),
+    (
+        "RWX",
+        "",
+        "RWX (read-write-execute) memory namespace — shellcode staging",
+    ),
     // Unity-specific patterns
-    ("UnityEngine","Il2CppSystem",       "IL2CPP Unity namespace — real-time game hack pattern"),
-    ("SDK",        "GameSDK",            "Game SDK namespace — common in compiled cheat SDKs"),
+    (
+        "UnityEngine",
+        "Il2CppSystem",
+        "IL2CPP Unity namespace — real-time game hack pattern",
+    ),
+    (
+        "SDK",
+        "GameSDK",
+        "Game SDK namespace — common in compiled cheat SDKs",
+    ),
     // Input simulation
-    ("InputSim",   "",                   "Input simulation namespace — synthetic mouse/keyboard"),
-    ("MouseMove",  "",                   "Mouse movement simulation — aimbot / input injection pattern"),
+    (
+        "InputSim",
+        "",
+        "Input simulation namespace — synthetic mouse/keyboard",
+    ),
+    (
+        "MouseMove",
+        "",
+        "Mouse movement simulation — aimbot / input injection pattern",
+    ),
     // Anti-detection patterns
-    ("AntiDetect", "",                   "Anti-detection namespace — attempting to evade AC scanning"),
-    ("Spoofer",    "",                   "Hardware ID / driver spoofer namespace"),
-    ("HWID",       "Spoof",              "HWID spoofer pattern — ban-evasion tooling"),
-    ("Cleaner",    "TraceCleaner",       "Trace cleaner — log/artifact removal pattern"),
+    (
+        "AntiDetect",
+        "",
+        "Anti-detection namespace — attempting to evade AC scanning",
+    ),
+    ("Spoofer", "", "Hardware ID / driver spoofer namespace"),
+    (
+        "HWID",
+        "Spoof",
+        "HWID spoofer pattern — ban-evasion tooling",
+    ),
+    (
+        "Cleaner",
+        "TraceCleaner",
+        "Trace cleaner — log/artifact removal pattern",
+    ),
 ];
 
 /// Scan the TypeDef type list for obfuscator markers and cheat patterns.
-fn scan_types(
-    types: &[(String, String)],
-) -> (Vec<String>, Vec<CheatHit>) {
+fn scan_types(types: &[(String, String)]) -> (Vec<String>, Vec<CheatHit>) {
     let mut obf_hints: Vec<String> = Vec::new();
     let mut cheat_hits: Vec<CheatHit> = Vec::new();
 
     for (ns, name) in types {
-        let ns_lo   = ns.to_lowercase();
+        let ns_lo = ns.to_lowercase();
         let name_lo = name.to_lowercase();
 
         // Obfuscator patterns: match against namespace OR type name
@@ -641,11 +829,7 @@ fn scan_types(
 /// * `data`     — full PE file bytes
 /// * `lfanew`   — pe_pointer from the DOS header (offset of the PE signature)
 /// * `sections` — section table from the parsed PE header
-pub fn parse_clr(
-    data: &[u8],
-    lfanew: u32,
-    sections: &[SectionTable],
-) -> Option<ClrInfo> {
+pub fn parse_clr(data: &[u8], lfanew: u32, sections: &[SectionTable]) -> Option<ClrInfo> {
     // ── locate the CLR header ─────────────────────────────────────────────────
     // Data directory index 14 = IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR.
     // When present its RVA points to IMAGE_COR20_HEADER (also: COR20 header).
@@ -668,13 +852,15 @@ pub fn parse_clr(
     //     16     4    Flags
     //     20     4    EntryPointToken or EntryPointRVA
     //   ... 14 more data directory pairs follow (we don't use them here)
-    let meta_rva  = r32(data, clr_off + 8);
-    let _meta_sz  = r32(data, clr_off + 12);
+    let meta_rva = r32(data, clr_off + 8);
+    let _meta_sz = r32(data, clr_off + 12);
     let clr_flags = r32(data, clr_off + 16);
 
     // ── locate the metadata root ──────────────────────────────────────────────
     let meta_off = rva_to_offset(meta_rva as u64, sections)?;
-    if meta_off >= data.len() { return None; }
+    if meta_off >= data.len() {
+        return None;
+    }
     let metadata = &data[meta_off..];
 
     // ── extract runtime version string ────────────────────────────────────────
@@ -712,26 +898,31 @@ pub fn parse_clr(
                 namespaces: vec![],
                 type_names: vec![],
                 obfuscator_hints: vec![
-                    "Metadata streams unreadable — binary may be packed or native-code-protected".into()
+                    "Metadata streams unreadable — binary may be packed or native-code-protected"
+                        .into(),
                 ],
                 cheat_pattern_hits: vec![],
-                is_ilonly:        clr_flags & 0x01 != 0,
-                requires_32bit:   clr_flags & 0x02 != 0,
+                is_ilonly: clr_flags & 0x01 != 0,
+                requires_32bit: clr_flags & 0x02 != 0,
                 strong_name_signed: clr_flags & 0x08 != 0,
             });
         }
     };
 
     // ── decode the logical metadata tables ────────────────────────────────────
-    let (asm_name, asm_version, culture, mvid, types) =
-        decode_tables(streams.tables, streams.strings, streams.guid)
-            .unwrap_or((None, None, None, None, vec![]));
+    let (asm_name, asm_version, culture, mvid, types) = decode_tables(
+        streams.tables,
+        streams.strings,
+        streams.guid,
+    )
+    .unwrap_or((None, None, None, None, vec![]));
 
     // ── scan types for obfuscator markers and cheat patterns ──────────────────
     let (obfuscator_hints, cheat_pattern_hits) = scan_types(&types);
 
     // Deduplicate and collect namespaces and type names for the report
-    let mut namespaces: Vec<String> = types.iter()
+    let mut namespaces: Vec<String> = types
+        .iter()
         .map(|(ns, _)| ns.clone())
         .filter(|ns| !ns.is_empty())
         .collect();
@@ -739,7 +930,8 @@ pub fn parse_clr(
     namespaces.dedup();
     namespaces.truncate(256);
 
-    let mut type_names: Vec<String> = types.iter()
+    let mut type_names: Vec<String> = types
+        .iter()
         .map(|(_, name)| name.clone())
         .filter(|n| !n.is_empty())
         .collect();
@@ -757,18 +949,16 @@ pub fn parse_clr(
         type_names,
         obfuscator_hints,
         cheat_pattern_hits,
-        is_ilonly:          clr_flags & 0x01 != 0,
-        requires_32bit:     clr_flags & 0x02 != 0,
+        is_ilonly: clr_flags & 0x01 != 0,
+        requires_32bit: clr_flags & 0x02 != 0,
         strong_name_signed: clr_flags & 0x08 != 0,
     })
 }
 
-// ── test-accessible pattern slices ───────────────────────────────────────────
-// pub statics so integration tests (separate crate) can verify the tables
-// contain expected entries. Not gated with #[cfg(test)] because integration
-// tests in tests/ are compiled as a separate crate and cannot see cfg(test)
-// items from the library.
-
+// Public pattern slices are retained for integration tests, which compile as a
+// separate crate and therefore cannot access test-only private items.
+#[allow(dead_code)]
 pub static OBFUSCATOR_PATTERNS_FOR_TEST: &[(&str, &str)] = OBFUSCATOR_PATTERNS;
 
+#[allow(dead_code)]
 pub static CHEAT_PATTERNS_FOR_TEST: &[(&str, &str, &str)] = CHEAT_PATTERNS;

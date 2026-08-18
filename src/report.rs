@@ -1,8 +1,36 @@
-use crate::analyzer::{BinaryInfo, packing_verdict};
+use crate::analyzer::{packing_verdict, BinaryInfo};
 use crate::hashes::Hashes;
 use crate::sigs::SigHit;
 use anyhow::Result;
 use std::fs;
+
+pub const JSON_SCHEMA_VERSION: &str = "1.0";
+
+pub struct JsonReport<'a> {
+    pub info: &'a BinaryInfo,
+    pub ad_hits: &'a [SigHit],
+    pub ac_hits: &'a [SigHit],
+    pub packing_hints: &'a [String],
+    pub hashes: &'a Hashes,
+    pub custom_hits: &'a [SigHit],
+    pub imphash_match: Option<&'a str>,
+    pub imphash_db_match: Option<&'a str>,
+}
+
+pub fn generate_json(report: JsonReport<'_>) -> Result<String> {
+    let mut document = serde_json::to_value(report.info)?;
+    document["schema_version"] = serde_json::json!(JSON_SCHEMA_VERSION);
+    document["tool_version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+    document["antidebug"] = serde_json::to_value(report.ad_hits)?;
+    document["anticheat"] = serde_json::to_value(report.ac_hits)?;
+    document["packing_hints"] = serde_json::to_value(report.packing_hints)?;
+    document["custom_rule_hits"] = serde_json::to_value(report.custom_hits)?;
+    document["hashes"] = serde_json::to_value(report.hashes)?;
+    document["imphash_match"] = serde_json::to_value(report.imphash_match)?;
+    document["imphash_db_match"] = serde_json::to_value(report.imphash_db_match)?;
+
+    Ok(serde_json::to_string_pretty(&document)?)
+}
 
 pub fn generate_html(
     info: &BinaryInfo,
@@ -12,19 +40,49 @@ pub fn generate_html(
     hashes: &Hashes,
     out_path: &str,
 ) -> Result<()> {
-    let imports_rows: String = info.imports.iter()
-        .map(|i| format!("<tr><td>{}</td><td>{}</td></tr>", e(&i.library), e(&i.function)))
+    let imports_rows: String = info
+        .imports
+        .iter()
+        .map(|i| {
+            format!(
+                "<tr><td>{}</td><td>{}</td></tr>",
+                e(&i.library),
+                e(&i.function)
+            )
+        })
         .collect();
 
-    let exports_rows: String = info.exports.iter()
-        .map(|ex| format!("<tr><td>{}</td><td>{:#x}</td><td>{}</td></tr>",
-            e(&ex.name), ex.rva, ex.ordinal.map(|o| o.to_string()).unwrap_or_default()))
+    let exports_rows: String = info
+        .exports
+        .iter()
+        .map(|ex| {
+            format!(
+                "<tr><td>{}</td><td>{:#x}</td><td>{}</td></tr>",
+                e(&ex.name),
+                ex.rva,
+                ex.ordinal.map(|o| o.to_string()).unwrap_or_default()
+            )
+        })
         .collect();
 
-    let sections_rows: String = info.sections.iter()
+    let sections_rows: String = info
+        .sections
+        .iter()
         .map(|s| {
-            let cls = if s.entropy > 7.2 { "danger" } else if s.entropy > 6.5 { "warn" } else { "" };
-            format!("<tr class=\"{}\"><td>{}</td><td>{}</td><td>{:.3}</td></tr>", cls, e(&s.name), s.size, s.entropy)
+            let cls = if s.entropy > 7.2 {
+                "danger"
+            } else if s.entropy > 6.5 {
+                "warn"
+            } else {
+                ""
+            };
+            format!(
+                "<tr class=\"{}\"><td>{}</td><td>{}</td><td>{:.3}</td></tr>",
+                cls,
+                e(&s.name),
+                s.size,
+                s.entropy
+            )
         })
         .collect();
 
@@ -32,17 +90,33 @@ pub fn generate_html(
         if hits.is_empty() {
             return "<tr><td colspan=\"2\" class=\"ok\">None detected</td></tr>".into();
         }
-        hits.iter().map(|h| format!("<tr><td>{}</td><td class=\"dim\">{}</td></tr>", e(&h.technique), e(&h.matched))).collect()
+        hits.iter()
+            .map(|h| {
+                format!(
+                    "<tr><td>{}</td><td class=\"dim\">{}</td></tr>",
+                    e(&h.technique),
+                    e(&h.matched)
+                )
+            })
+            .collect()
     };
 
-    let hints_rows: String = packing_hints.iter()
+    let hints_rows: String = packing_hints
+        .iter()
         .map(|h| {
-            let cls = if h.starts_with("No packing") { "ok" } else { "warn" };
+            let cls = if h.starts_with("No packing") {
+                "ok"
+            } else {
+                "warn"
+            };
             format!("<tr class=\"{}\"><td>{}</td></tr>", cls, e(h))
         })
         .collect();
 
-    let strings_list: String = info.strings.iter().take(500)
+    let strings_list: String = info
+        .strings
+        .iter()
+        .take(500)
         .map(|s| format!("<li>{}</li>", e(s)))
         .collect();
 
@@ -57,14 +131,19 @@ pub fn generate_html(
     let tls_rows: String = if info.tls_callbacks.is_empty() {
         "<tr><td class=\"ok\">No TLS callbacks found</td></tr>".into()
     } else {
-        info.tls_callbacks.iter().map(|t| format!("<tr class=\"danger\"><td>{}</td></tr>", e(t))).collect()
+        info.tls_callbacks
+            .iter()
+            .map(|t| format!("<tr class=\"danger\"><td>{}</td></tr>", e(t)))
+            .collect()
     };
 
     // elf init handlers - constructors that run before main()
     let init_handlers_section: String = if info.elf_init_handlers.is_empty() {
         String::new()
     } else {
-        let rows: String = info.elf_init_handlers.iter()
+        let rows: String = info
+            .elf_init_handlers
+            .iter()
             .map(|addr| format!("<tr class=\"warn\"><td>0x{:016x}</td></tr>", addr))
             .collect();
         format!(
@@ -80,8 +159,15 @@ pub fn generate_html(
     let warnings_section: String = if info.section_warnings.is_empty() {
         String::new()
     } else {
-        let rows: String = info.section_warnings.iter()
-            .map(|w| format!("<tr class=\"warn\"><td style=\"color:#f85149\">⚠️ {}</td></tr>", e(w)))
+        let rows: String = info
+            .section_warnings
+            .iter()
+            .map(|w| {
+                format!(
+                    "<tr class=\"warn\"><td style=\"color:#f85149\">⚠️ {}</td></tr>",
+                    e(w)
+                )
+            })
             .collect();
         format!(
             "<h2>Section Anomalies / Warnings ({count})</h2>\n\
@@ -95,11 +181,19 @@ pub fn generate_html(
     let segments_section: String = if info.elf_segments.is_empty() {
         String::new()
     } else {
-        let rows: String = info.elf_segments.iter()
-            .map(|s| format!(
-                "<tr><td>{}</td><td>{}</td><td>0x{:016x}</td><td>{}</td><td>{}</td></tr>",
-                e(&s.segment_type), e(&s.flags), s.vaddr, s.memsz, s.filesz
-            ))
+        let rows: String = info
+            .elf_segments
+            .iter()
+            .map(|s| {
+                format!(
+                    "<tr><td>{}</td><td>{}</td><td>0x{:016x}</td><td>{}</td><td>{}</td></tr>",
+                    e(&s.segment_type),
+                    e(&s.flags),
+                    s.vaddr,
+                    s.memsz,
+                    s.filesz
+                )
+            })
             .collect();
         format!(
             "<h2>ELF Program Headers ({count})</h2>\n\
@@ -111,11 +205,15 @@ pub fn generate_html(
 
     let rich_section: String = match &info.rich_header {
         Some(rh) => {
-            let rows: String = rh.entries.iter()
-                .map(|en| format!(
-                    "<tr><td>0x{:08x}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                    en.comp_id, en.product_id, en.build_number, en.count
-                ))
+            let rows: String = rh
+                .entries
+                .iter()
+                .map(|en| {
+                    format!(
+                        "<tr><td>0x{:08x}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                        en.comp_id, en.product_id, en.build_number, en.count
+                    )
+                })
                 .collect();
             format!(
                 "<h2>Rich Header <span class=\"dim\">(hash: {})</span></h2>\n\
@@ -135,9 +233,13 @@ pub fn generate_html(
              <tr><th>SHA-256</th><td class=\"hash\">{}</td></tr>\n\
              <tr><th>Entropy</th><td>{:.3}</td></tr>\n\
              </table>",
-            ov.offset, ov.size, e(&ov.sha256), ov.entropy
+            ov.offset,
+            ov.size,
+            e(&ov.sha256),
+            ov.entropy
         ),
-        None => "<h2>Overlay</h2>\n<p class=\"dim\">None — file ends at the last section.</p>".to_string(),
+        None => "<h2>Overlay</h2>\n<p class=\"dim\">None — file ends at the last section.</p>"
+            .to_string(),
     };
 
     let authenticode_section: String = match &info.authenticode {
@@ -146,10 +248,9 @@ pub fn generate_html(
                 .map(|s| format!("<li>{}</li>", e(s)))
                 .collect();
             format!(
-                "<h2>Authenticode <span class=\"badge ok\">SIGNED</span></h2>\n\
+                "<h2>Authenticode <span class=\"badge warn\">METADATA PRESENT</span></h2>\n\
                  <p>Certificate type {} / revision 0x{:04x} / {} bytes</p>\n\
-                 <p class=\"dim\">Candidate identity strings from the certificate blob \
-                 (heuristic extraction — NOT signature verification):</p>\n\
+                 <p class=\"dim\">Certificate-table metadata is present; trust, coverage, timestamping, and revocation are not verified.\n                 Candidate identity strings are extracted heuristically from the certificate blob:</p>\n\
                  <ul>{}</ul>",
                 auth.cert_type, auth.cert_revision, auth.size, identities
             )
@@ -160,7 +261,13 @@ pub fn generate_html(
     let version_section: String = match &info.version_info {
         Some(vi) => {
             let row = |label: &str, val: &Option<String>| -> String {
-                format!("<tr><th>{}</th><td>{}</td></tr>", label, val.as_deref().map(e).unwrap_or_else(|| "(none)".to_string()))
+                format!(
+                    "<tr><th>{}</th><td>{}</td></tr>",
+                    label,
+                    val.as_deref()
+                        .map(e)
+                        .unwrap_or_else(|| "(none)".to_string())
+                )
             };
             format!(
                 "<h2>Version Info</h2>\n<table>\n{}{}{}{}{}{}{}{}</table>",
@@ -174,43 +281,61 @@ pub fn generate_html(
                 row("ProductVersion", &vi.product_version),
             )
         }
-        None => "<h2>Version Info</h2>\n<p class=\"dim\">No VS_VERSIONINFO resource found.</p>".to_string(),
+        None => "<h2>Version Info</h2>\n<p class=\"dim\">No VS_VERSIONINFO resource found.</p>"
+            .to_string(),
     };
 
     let icons_section: String = if info.icon_hashes.is_empty() {
         "<h2>Icon Resources</h2>\n<p class=\"dim\">No RT_ICON resources found.</p>".to_string()
     } else {
-        let items: String = info.icon_hashes.iter()
+        let items: String = info
+            .icon_hashes
+            .iter()
             .map(|h| format!("<li class=\"hash\">{}</li>", e(h)))
             .collect();
-        format!("<h2>Icon Resources</h2>\n<p>{} icon resource(s) — SHA-256:</p><ul>{}</ul>", info.icon_hashes.len(), items)
+        format!(
+            "<h2>Icon Resources</h2>\n<p>{} icon resource(s) — SHA-256:</p><ul>{}</ul>",
+            info.icon_hashes.len(),
+            items
+        )
     };
 
     let clr_section: String = match &info.clr {
-        None => "<h2>CLR / .NET</h2>\n<p class=\"dim\">Not a managed binary — no CLR header.</p>".to_string(),
+        None => "<h2>CLR / .NET</h2>\n<p class=\"dim\">Not a managed binary — no CLR header.</p>"
+            .to_string(),
         Some(ci) => {
             let flags_str = ci.clr_flags_desc.join(", ");
             let obf_rows: String = if ci.obfuscator_hints.is_empty() {
                 "<tr><td class=\"ok\">No obfuscator markers detected</td></tr>".to_string()
             } else {
-                ci.obfuscator_hints.iter()
+                ci.obfuscator_hints
+                    .iter()
                     .map(|h| format!("<tr class=\"warn\"><td>{}</td></tr>", e(h)))
                     .collect()
             };
             let cheat_rows: String = if ci.cheat_pattern_hits.is_empty() {
                 "<tr><td class=\"ok\">No C# cheat patterns detected</td></tr>".to_string()
             } else {
-                ci.cheat_pattern_hits.iter()
-                    .map(|h| format!(
-                        "<tr class=\"danger\"><td>{}</td><td class=\"dim\">{}</td></tr>",
-                        e(&h.matched), e(&h.description)
-                    ))
+                ci.cheat_pattern_hits
+                    .iter()
+                    .map(|h| {
+                        format!(
+                            "<tr class=\"danger\"><td>{}</td><td class=\"dim\">{}</td></tr>",
+                            e(&h.matched),
+                            e(&h.description)
+                        )
+                    })
                     .collect()
             };
-            let ns_list: String = ci.namespaces.iter().take(64)
+            let ns_list: String = ci
+                .namespaces
+                .iter()
+                .take(64)
                 .map(|ns| format!("<li>{}</li>", e(ns)))
                 .collect();
-            let mvid_row = ci.mvid.as_deref()
+            let mvid_row = ci
+                .mvid
+                .as_deref()
                 .map(|m| format!("<tr><th>MVID</th><td class=\"dim\">{}</td></tr>", e(m)))
                 .unwrap_or_default();
             format!(
@@ -233,25 +358,26 @@ pub fn generate_html(
                  <tbody>{cheat_rows}</tbody></table>\n\
                  <h2>Namespaces ({ns_count})</h2>\n\
                  <ul>{ns_list}</ul>",
-                asm        = e(ci.assembly_name.as_deref().unwrap_or("(none)")),
-                ver        = e(ci.assembly_version.as_deref().unwrap_or("?")),
-                culture    = e(ci.culture.as_deref().unwrap_or("neutral")),
-                rt         = e(&ci.runtime_version),
-                flags      = e(&flags_str),
-                ilonly     = if ci.is_ilonly   { "YES" } else { "NO" },
-                req32      = if ci.requires_32bit { "YES" } else { "NO" },
-                sn         = if ci.strong_name_signed { "YES" } else { "NO" },
-                mvid_row   = mvid_row,
-                obf_rows   = obf_rows,
+                asm = e(ci.assembly_name.as_deref().unwrap_or("(none)")),
+                ver = e(ci.assembly_version.as_deref().unwrap_or("?")),
+                culture = e(ci.culture.as_deref().unwrap_or("neutral")),
+                rt = e(&ci.runtime_version),
+                flags = e(&flags_str),
+                ilonly = if ci.is_ilonly { "YES" } else { "NO" },
+                req32 = if ci.requires_32bit { "YES" } else { "NO" },
+                sn = if ci.strong_name_signed { "YES" } else { "NO" },
+                mvid_row = mvid_row,
+                obf_rows = obf_rows,
                 cheat_count = ci.cheat_pattern_hits.len(),
                 cheat_rows = cheat_rows,
-                ns_count   = ci.namespaces.len(),
-                ns_list    = ns_list,
+                ns_count = ci.namespaces.len(),
+                ns_list = ns_list,
             )
         }
     };
 
-    let html = format!(r#"<!DOCTYPE html>
+    let html = format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -333,15 +459,19 @@ pub fn generate_html(
 <h2>Strings (top 500)</h2>
 <ul>{strings_list}</ul>
 
-<footer><p style="color:#30363d;font-size:.7rem;margin-top:2rem">generated by sigil v0.2.0</p></footer>
+<footer><p style="color:#30363d;font-size:.7rem;margin-top:2rem">generated by sigil v{version}</p></footer>
 </body></html>"#,
-        path = info.path,
-        md5 = hashes.md5,
-        sha256 = hashes.sha256,
-        imphash = imphash_row,
-        header_rows = info.headers.iter()
-            .map(|(k, v)| format!("<th>{}</th><td>{}</td>", k, v))
-            .collect::<Vec<_>>().join("</tr><tr>"),
+        path = e(&info.path),
+        version = env!("CARGO_PKG_VERSION"),
+        md5 = e(&hashes.md5),
+        sha256 = e(&hashes.sha256),
+        imphash = e(imphash_row),
+        header_rows = info
+            .headers
+            .iter()
+            .map(|(k, v)| format!("<th>{}</th><td>{}</td>", e(k), e(v)))
+            .collect::<Vec<_>>()
+            .join("</tr><tr>"),
         rich_section = rich_section,
         overlay_section = overlay_section,
         authenticode_section = authenticode_section,
@@ -374,5 +504,21 @@ pub fn generate_html(
 
 #[inline]
 fn e(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::e;
+
+    #[test]
+    fn escapes_html_significant_characters() {
+        assert_eq!(
+            e("<script a=\"x\">&</script>"),
+            "&lt;script a=&quot;x&quot;&gt;&amp;&lt;/script&gt;"
+        );
+    }
 }

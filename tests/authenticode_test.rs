@@ -1,11 +1,10 @@
+use sigil::analyzer::{parse_authenticode, pe_data_directory, read_file};
 /// Tests for parse_authenticode and pe_data_directory — Authenticode
 /// certificate table detection and heuristic identity-string extraction.
 ///
 /// NOTE: parse_authenticode is a triage signal only (presence + readable
 /// strings from the cert blob), not signature verification.
-
 use std::path::PathBuf;
-use sigil::analyzer::{parse_authenticode, pe_data_directory, read_file};
 
 fn fixture(name: &str) -> String {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -69,7 +68,11 @@ fn synthetic_certificate_table_extracts_identity_strings() {
 
     // The cert blob's readable strings should surface as candidate identities
     let joined = auth.candidate_identities.join(" ");
-    assert!(joined.contains("Acme"), "expected 'Acme' in candidate identities, got: {:?}", auth.candidate_identities);
+    assert!(
+        joined.contains("Acme"),
+        "expected 'Acme' in candidate identities, got: {:?}",
+        auth.candidate_identities
+    );
 }
 
 #[test]

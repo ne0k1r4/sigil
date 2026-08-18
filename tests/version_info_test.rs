@@ -1,7 +1,6 @@
 /// Tests for parse_version_info — heuristic extraction of VS_VERSIONINFO
 /// StringFileInfo fields (CompanyName, OriginalFilename, etc.) from a
 /// RT_VERSION resource blob.
-
 use sigil::analyzer::parse_version_info;
 
 /// Encode a UTF-16LE string (no null terminator) as raw bytes.
@@ -14,7 +13,7 @@ fn utf16le(s: &str) -> Vec<u8> {
 fn key_value(key: &str, value: &str) -> Vec<u8> {
     let mut buf = utf16le(key);
     buf.extend_from_slice(&0u16.to_le_bytes()); // null terminator for key
-    while buf.len() % 4 != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(0); // alignment padding
     }
     buf.extend_from_slice(&utf16le(value));

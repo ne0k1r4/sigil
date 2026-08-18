@@ -110,10 +110,7 @@ pub fn disassemble(code: &[u8], base_addr: u64, is_64: bool, count: usize) -> Re
 ///
 /// Returns a `FullDisasm` summary suitable for JSON output or further
 /// analysis.
-pub fn disassemble_full(
-    data: &[u8],
-    max_insns_per_section: usize,
-) -> Result<FullDisasm> {
+pub fn disassemble_full(data: &[u8], max_insns_per_section: usize) -> Result<FullDisasm> {
     match Object::parse(data)? {
         Object::PE(pe) => {
             let arch = if pe.is_64 { "x86_64" } else { "x86" };
@@ -129,11 +126,11 @@ pub fn disassemble_full(
                 if chars & 0x2000_0020 == 0 {
                     continue;
                 }
-                let off  = sec.pointer_to_raw_data as usize;
-                let sz   = sec.size_of_raw_data as usize;
+                let off = sec.pointer_to_raw_data as usize;
+                let sz = sec.size_of_raw_data as usize;
                 let code = match data.get(off..off + sz) {
                     Some(s) => s,
-                    None    => continue,
+                    None => continue,
                 };
                 let va = pe.image_base as u64 + sec.virtual_address as u64;
                 let sec_name = String::from_utf8_lossy(&sec.name)
@@ -159,7 +156,12 @@ pub fn disassemble_full(
 
                     insns.push(Insn {
                         addr: i.address(),
-                        bytes: i.bytes().iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "),
+                        bytes: i
+                            .bytes()
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" "),
                         mnemonic: mn,
                         op_str: op,
                     });
@@ -184,11 +186,11 @@ pub fn disassemble_full(
 
         Object::Elf(elf) => {
             let arch = match elf.header.e_machine {
-                goblin::elf::header::EM_X86_64  => "x86_64",
-                goblin::elf::header::EM_386     => "x86",
+                goblin::elf::header::EM_X86_64 => "x86_64",
+                goblin::elf::header::EM_386 => "x86",
                 goblin::elf::header::EM_AARCH64 => "aarch64",
-                goblin::elf::header::EM_ARM     => "arm",
-                _                               => "x86_64",
+                goblin::elf::header::EM_ARM => "arm",
+                _ => "x86_64",
             };
             let cs = build_cs(arch, elf.is_64)?;
             let mut sections_out = Vec::new();
@@ -201,13 +203,13 @@ pub fn disassemble_full(
                 if sh.sh_flags & 0x4 == 0 || sh.sh_size == 0 {
                     continue;
                 }
-                let off  = sh.sh_offset as usize;
-                let sz   = sh.sh_size as usize;
+                let off = sh.sh_offset as usize;
+                let sz = sh.sh_size as usize;
                 let code = match data.get(off..off + sz) {
                     Some(s) => s,
-                    None    => continue,
+                    None => continue,
                 };
-                let va       = sh.sh_addr;
+                let va = sh.sh_addr;
                 let sec_name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("").to_string();
 
                 let insns_raw = cs
@@ -228,7 +230,12 @@ pub fn disassemble_full(
 
                     insns.push(Insn {
                         addr: i.address(),
-                        bytes: i.bytes().iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "),
+                        bytes: i
+                            .bytes()
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" "),
                         mnemonic: mn,
                         op_str: op,
                     });

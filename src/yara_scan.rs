@@ -3,7 +3,6 @@
 /// Uses yara_x — VirusTotal's official pure-Rust YARA reimplementation.
 /// No libyara dependency, no bindgen, no C headers required.
 /// 99% compatible with existing .yar / .yara rule files.
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -98,10 +97,10 @@ pub fn scan(data: &[u8], rule_paths: &[String]) -> Result<Vec<YaraMatch>> {
             .map(|(k, v)| {
                 let val = match v {
                     yara_x::MetaValue::Integer(i) => i.to_string(),
-                    yara_x::MetaValue::Float(f)   => f.to_string(),
-                    yara_x::MetaValue::Bool(b)     => b.to_string(),
-                    yara_x::MetaValue::String(s)   => s.to_string(),
-                    yara_x::MetaValue::Bytes(b)    => format!("{:?}", b),
+                    yara_x::MetaValue::Float(f) => f.to_string(),
+                    yara_x::MetaValue::Bool(b) => b.to_string(),
+                    yara_x::MetaValue::String(s) => s.to_string(),
+                    yara_x::MetaValue::Bytes(b) => format!("{:?}", b),
                 };
                 (k.to_string(), val)
             })
@@ -116,7 +115,7 @@ pub fn scan(data: &[u8], rule_paths: &[String]) -> Result<Vec<YaraMatch>> {
             .collect();
 
         out.push(YaraMatch {
-            rule:      m.identifier().to_string(),
+            rule: m.identifier().to_string(),
             namespace: m.namespace().to_string(),
             tags,
             meta,
@@ -126,4 +125,3 @@ pub fn scan(data: &[u8], rule_paths: &[String]) -> Result<Vec<YaraMatch>> {
 
     Ok(out)
 }
-

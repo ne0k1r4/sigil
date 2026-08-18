@@ -76,15 +76,26 @@ pub fn scan_rules(rules: &RuleFile, data: &[u8], strings: &[String]) -> Vec<SigH
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    eprintln!("sigil: warning: rule '{}' has invalid hex_pattern: {}", rule.name, e);
+                    eprintln!(
+                        "sigil: warning: rule '{}' has invalid hex_pattern: {}",
+                        rule.name, e
+                    );
                 }
             }
         }
 
         if let Some(sub) = &rule.string_match {
-            let needle = if rule.case_insensitive { sub.to_lowercase() } else { sub.clone() };
+            let needle = if rule.case_insensitive {
+                sub.to_lowercase()
+            } else {
+                sub.clone()
+            };
             for s in strings {
-                let hay = if rule.case_insensitive { s.to_lowercase() } else { s.clone() };
+                let hay = if rule.case_insensitive {
+                    s.to_lowercase()
+                } else {
+                    s.clone()
+                };
                 if hay.contains(&needle) {
                     hits.push(SigHit {
                         category: rule.category.clone(),

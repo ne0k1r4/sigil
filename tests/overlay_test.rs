@@ -1,11 +1,10 @@
-/// Tests for compute_overlay_info — detecting trailing data appended after
-/// the last PE section ("overlay"): common in SFX archives, installers,
-/// and Authenticode-signed binaries.
-
-use std::path::PathBuf;
 use goblin::Object;
 use sha2::Digest;
 use sigil::analyzer::{compute_overlay_info, read_file, shannon_entropy};
+/// Tests for compute_overlay_info — detecting trailing data appended after
+/// the last PE section ("overlay"): common in SFX archives, installers,
+/// and Authenticode-signed binaries.
+use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -24,7 +23,11 @@ fn minimal_pe_has_no_overlay() {
         _ => panic!("expected PE"),
     };
     let overlay = compute_overlay_info(&data, &pe.sections);
-    assert!(overlay.is_none(), "minimal PE should have no overlay, got {:?}", overlay);
+    assert!(
+        overlay.is_none(),
+        "minimal PE should have no overlay, got {:?}",
+        overlay
+    );
 }
 
 #[test]
