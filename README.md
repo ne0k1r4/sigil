@@ -84,11 +84,34 @@ sigil yara sample.exe --rules rules/
 
 # HTML report
 sigil report sample.exe --html --output sample-report.html
+
+# Versioned JSON report written to a new file
+sigil report sample.exe --output sample-report.json
+
+# Recursive batch scan; return non-zero if any file fails analysis
+sigil batch samples/ --recursive --json --fail-on-error
 ```
 
 If you are piping output into another tool, add `--quiet` to suppress the banner.
 Files over 256 MB are blocked by default; pass `--no-size-limit` when you really
-want to analyze one.
+want to analyze one. Report commands never overwrite an existing `--output` file;
+choose a new path or remove the old file first.
+
+## JSON automation contract
+
+`sigil scan <path> --json` and `sigil report <path>` emit the same full-analysis
+JSON document. The top-level `schema_version` and `tool_version` fields identify
+the document contract and the Sigil build that produced it. `sigil report <path>
+--output report.json` writes that document to a new file; without `--output`, it
+writes the document to standard output.
+
+## Batch automation
+
+`sigil batch <dir> --json` returns results in deterministic path order. Files that
+cannot be analyzed are represented as entries with an `error` field, while the
+default process status remains successful for backwards compatibility. Add
+`--fail-on-error` when a partial failure must produce a non-zero exit status; the
+completed JSON result is still written to standard output for inspection.
 
 ## Custom signatures
 
