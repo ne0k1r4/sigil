@@ -159,3 +159,62 @@ fn batch_json_is_sorted_and_fail_on_error_is_opt_in() {
     assert!(String::from_utf8_lossy(&strict_run.stderr)
         .contains("batch scan completed with 1 failed file"));
 }
+
+#[test]
+fn empty_batch_is_valid_json_and_succeeds_in_strict_mode() {
+    let temp_dir = TempDir::new("empty_batch");
+    let temp_dir_str = temp_dir.0.to_str().expect("temporary path is UTF-8");
+
+    let output = run_sigil(&[
+        "--quiet",
+        "batch",
+        temp_dir_str,
+        "--json",
+        "--fail-on-error",
+    ]);
+    assert!(
+        output.status.success(),
+        "an empty batch is complete and should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let results: Value =
+        serde_json::from_slice(&output.stdout).expect("empty batch output should be valid JSON");
+    assert_eq!(results, Value::Array(Vec::new()));
+}
+
+#[cfg(unix)]
+#[test]
+fn recursive_batch_skips_symbolic_links_without_losing_regular_files() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = TempDir::new("batch_symlink_safety");
+    let root_file = temp_dir.join("a_root.exe");
+    let nested_dir = temp_dir.join("nested");
+    let nested_file = nested_dir.join("b_nested.exe");
+    fs::create_dir(&nested_dir).expect("nested directory should be created");
+    fs::copy(fixture("minimal.exe"), &root_file).expect("root fixture should be copied");
+    fs::copy(fixture("minimal.exe"), &nested_file).expect("nested fixture should be copied");
+    symlink(&root_file, temp_dir.join("z_file_link.exe")).expect("file symlink should be created");
+    symlink(&nested_dir, temp_dir.join("y_directory_link"))
+        .expect("directory symlink should be created");
+    let temp_dir_str = temp_dir.0.to_str().expect("temporary path is UTF-8");
+
+    let output = run_sigil(&["--quiet", "batch", temp_dir_str, "--recursive", "--json"]);
+    assert!(
+        output.status.success(),
+        "recursive batch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let results: Value =
+        serde_json::from_slice(&output.stdout).expect("batch output should be valid JSON");
+    let results = results.as_array().expect("batch output should be an array");
+    assert_eq!(results.len(), 2, "only regular files should be scanned");
+    let paths: Vec<&str> = results
+        .iter()
+        .map(|result| result["path"].as_str().expect("path should be a string"))
+        .collect();
+    assert!(paths[0].ends_with("a_root.exe"));
+    assert!(paths[1].ends_with("b_nested.exe"));
+    assert!(paths.iter().all(|path| !path.contains("_link")));
+}

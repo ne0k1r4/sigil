@@ -111,7 +111,10 @@ writes the document to standard output.
 cannot be analyzed are represented as entries with an `error` field, while the
 default process status remains successful for backwards compatibility. Add
 `--fail-on-error` when a partial failure must produce a non-zero exit status; the
-completed JSON result is still written to standard output for inspection.
+completed JSON result is still written to standard output for inspection. Recursive
+collection descends into real directories and scans regular files only; symbolic
+links and special filesystem objects are skipped to prevent duplicate scans and
+link-based traversal cycles.
 
 ## Custom signatures
 

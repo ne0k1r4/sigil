@@ -36,7 +36,6 @@ struct Cli {
     #[arg(long, global = true)]
     sigs: Option<String>,
     /// Path to an imphash database (CSV: imphash,signature — e.g. a
-    /// MalwareBazaar export from https://bazaar.abuse.ch/export/)
     #[arg(long, global = true)]
     imphash_db: Option<String>,
     #[command(subcommand)]
@@ -169,7 +168,6 @@ enum Commands {
         json: bool,
     },
     /// Show .NET / CLR assembly metadata (assembly name, version, MVID,
-    /// type list, obfuscator hints, C# cheat pattern hits)
     Clr {
         path: String,
         #[arg(long)]
@@ -1574,8 +1572,16 @@ fn collect_files(dir: &str, recursive: bool) -> Result<Vec<String>> {
         std::fs::read_dir(dir).with_context(|| format!("cannot read directory '{}'", dir))?;
     for entry in entries {
         let entry = entry?;
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
         let path = entry.path();
-        if path.is_dir() {
+
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             if recursive {
                 if let Some(p) = path.to_str() {
                     out.extend(collect_files(p, recursive)?);
@@ -1583,8 +1589,10 @@ fn collect_files(dir: &str, recursive: bool) -> Result<Vec<String>> {
             }
             continue;
         }
-        if let Some(p) = path.to_str() {
-            out.push(p.to_string());
+        if file_type.is_file() {
+            if let Some(p) = path.to_str() {
+                out.push(p.to_string());
+            }
         }
     }
     out.sort();
