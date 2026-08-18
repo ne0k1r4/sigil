@@ -1,8 +1,4 @@
 /// YARA rule scanning for sigil.
-///
-/// Uses yara_x — VirusTotal's official pure-Rust YARA reimplementation.
-/// No libyara dependency, no bindgen, no C headers required.
-/// 99% compatible with existing .yar / .yara rule files.
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -29,12 +25,6 @@ pub struct PatternMatch {
 }
 
 /// Load one or more YARA rule files / directories and scan `data` against them.
-///
-/// `rule_paths` may contain individual `.yar`/`.yara` files or directories.
-/// Directories are searched non-recursively for `*.yar` and `*.yara` files.
-///
-/// Returns a list of `YaraMatch` records (one per matching rule), or an empty
-/// vec when no rules match. Returns `Err` on missing paths or compile errors.
 pub fn scan(data: &[u8], rule_paths: &[String]) -> Result<Vec<YaraMatch>> {
     if rule_paths.is_empty() {
         return Ok(vec![]);

@@ -103,8 +103,6 @@ pub struct RichHeaderEntry {
 pub struct RichHeaderInfo {
     pub entries: Vec<RichHeaderEntry>,
     /// MD5 of the decoded entry table — a compiler/linker toolchain
-    /// fingerprint. Two binaries built with the same toolchain and the
-    /// same set of object files tend to share this hash.
     pub hash: String,
 }
 
@@ -126,19 +124,10 @@ pub struct AuthenticodeInfo {
     /// Size in bytes of the certificate table entry
     pub size: u32,
     /// Printable strings extracted from the raw DER-encoded certificate
-    /// blob — typically includes Subject/Issuer Common Names and
-    /// Organization fields from the X.509 certificate(s).
-    ///
-    /// NOTE: this is a heuristic string scan, *not* signature
-    /// verification. A binary having an Authenticode certificate table
-    /// does not mean the signature is valid, unexpired, or trusted —
-    /// only that one is present.
     pub candidate_identities: Vec<String>,
 }
 
 /// Standard VS_VERSIONINFO StringFileInfo fields, extracted heuristically
-/// by scanning the RT_VERSION resource for known UTF-16LE key names and
-/// reading the value that follows.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct VersionInfo {
     pub company_name: Option<String>,
@@ -190,7 +179,6 @@ fn r64le(data: &[u8], off: usize) -> u64 {
 }
 
 /// Read and validate a binary file.
-/// Set `no_size_limit = true` to bypass the 256 MB cap (e.g. for large firmware blobs).
 pub fn read_file(path: &str, no_size_limit: bool) -> Result<Vec<u8>> {
     let meta = fs::metadata(path).with_context(|| format!("cannot stat '{}'", path))?;
     if !no_size_limit && meta.len() > MAX_FILE_SIZE {
@@ -219,14 +207,6 @@ pub fn rva_to_offset(
 }
 
 /// Parse the (undocumented) PE "Rich" header — an XOR-obfuscated table of
-/// linker/compiler tool identifiers that MSVC embeds between the DOS stub
-/// and the PE header. Useful as a build-toolchain fingerprint: two binaries
-/// compiled from the same project with the same toolchain tend to produce
-/// the same hash, while a packed/repacked binary often has none at all.
-///
-/// Returns `None` if no "Rich" marker is found (common for non-MSVC
-/// toolchains, hand-crafted PEs, or binaries where the DOS stub was
-/// stripped/overwritten by a packer).
 pub fn parse_rich_header(data: &[u8], lfanew: u32) -> Option<RichHeaderInfo> {
     let lfanew = lfanew as usize;
     if lfanew < 0x80 || lfanew > data.len() {
@@ -244,7 +224,6 @@ pub fn parse_rich_header(data: &[u8], lfanew: u32) -> Option<RichHeaderInfo> {
     let key = r32le(data, rich_abs + 4);
 
     // Walk backwards in 4-byte steps looking for the XOR-encoded "DanS"
-    // marker (0x536E6144), which marks the start of the table
     let mut dans_pos = None;
     let mut p = rich_abs;
     while p >= 0x80 + 4 {
@@ -257,7 +236,6 @@ pub fn parse_rich_header(data: &[u8], lfanew: u32) -> Option<RichHeaderInfo> {
     let dans_pos = dans_pos?;
 
     // DanS is followed by 3 zero-padding dwords, then pairs of
-    // (CompID dword, Count dword) up to the "Rich" marker
     let entries_start = dans_pos + 16;
     if entries_start > rich_abs {
         return None;
@@ -287,13 +265,6 @@ pub fn parse_rich_header(data: &[u8], lfanew: u32) -> Option<RichHeaderInfo> {
 }
 
 /// Walk the PE TLS data directory (IMAGE_TLS_DIRECTORY) to enumerate actual
-/// TLS callback virtual addresses. These execute *before* the program's
-/// normal entry point and are a well-known anti-debug / anti-cheat-bypass
-/// execution vector — far more precise than just noting that a `.tls`
-/// section exists.
-///
-/// Returns a list of callback VAs (empty if there is no TLS directory, or
-/// it has no callbacks).
 pub fn parse_tls_callbacks(
     data: &[u8],
     lfanew: u32,
@@ -312,7 +283,6 @@ pub fn parse_tls_callbacks(
     let is64 = magic == 0x20B;
 
     // Data directories begin 96 bytes into the optional header for PE32,
-    // or 112 bytes in for PE32+. TLS table is data directory index 9.
     let dd_base = opt_off + if is64 { 112 } else { 96 };
     let tls_dir_off = dd_base + 9 * 8;
     if tls_dir_off + 8 > data.len() {
@@ -328,7 +298,6 @@ pub fn parse_tls_callbacks(
     };
 
     // AddressOfCallBacks: offset 24 in IMAGE_TLS_DIRECTORY64, offset 12 in
-    // IMAGE_TLS_DIRECTORY32
     let (cb_va, ptr_size) = if is64 {
         (r64le(data, tls_off + 24), 8usize)
     } else {
@@ -344,7 +313,6 @@ pub fn parse_tls_callbacks(
     };
 
     // Walk the null-terminated array of callback VAs (cap at 64 to bound
-    // execution on a corrupt/adversarial binary)
     for _ in 0..64 {
         if off + ptr_size > data.len() {
             break;
@@ -364,11 +332,6 @@ pub fn parse_tls_callbacks(
 }
 
 /// Read a PE data directory entry (RVA/offset + size) by index.
-/// Index 2 = resource table, 4 = certificate table, 9 = TLS table, etc.
-///
-/// NOTE: for the certificate table (index 4) the first field is a *file
-/// offset*, not an RVA — this is the one exception in the PE spec. Callers
-/// must handle that distinction; this function just returns the raw value.
 pub fn pe_data_directory(data: &[u8], lfanew: u32, index: usize) -> (u32, u32) {
     let lfanew = lfanew as usize;
     let opt_off = lfanew + 4 + 20;
@@ -386,8 +349,6 @@ pub fn pe_data_directory(data: &[u8], lfanew: u32, index: usize) -> (u32, u32) {
 }
 
 /// Compute info about any data appended after the last section ("overlay").
-/// Common for self-extracting archives, installers, and signed binaries
-/// (the Authenticode signature itself often lives in the overlay region).
 pub fn compute_overlay_info(
     data: &[u8],
     sections: &[goblin::pe::section_table::SectionTable],
@@ -411,11 +372,6 @@ pub fn compute_overlay_info(
 }
 
 /// Parse the Authenticode certificate table (data directory index 4), if
-/// present. Extracts the WIN_CERTIFICATE header fields and runs a printable
-/// string scan over the embedded DER-encoded certificate blob to surface
-/// likely Subject/Issuer identity strings.
-///
-/// This is a fast triage signal only — it does NOT verify the signature.
 pub fn parse_authenticode(data: &[u8], lfanew: u32) -> Option<AuthenticodeInfo> {
     // Certificate table: field 1 is a file OFFSET (not RVA, per spec)
     let (cert_off, cert_size) = pe_data_directory(data, lfanew, 4);
@@ -437,8 +393,6 @@ pub fn parse_authenticode(data: &[u8], lfanew: u32) -> Option<AuthenticodeInfo> 
     let blob = &data[blob_start..blob_end];
 
     // DER-encoded X.509 fields (CN=, O=, etc.) appear as printable ASCII
-    // runs inside the otherwise-binary PKCS#7 structure. Filter to
-    // plausible identity-like strings (contains a letter, reasonable length).
     let candidate_identities: Vec<String> = extract_strings(blob, 4)
         .into_iter()
         .filter(|s| s.len() >= 4 && s.len() <= 80 && s.chars().any(|c| c.is_alphabetic()))
@@ -465,7 +419,6 @@ const VERSION_INFO_KEYS: &[&str] = &[
 ];
 
 /// Read a null-terminated UTF-16LE string starting at `start`, capped at
-/// 256 code units to bound execution on adversarial input.
 fn read_utf16_string(blob: &[u8], start: usize) -> String {
     let mut units = Vec::new();
     let mut i = start;
@@ -484,14 +437,6 @@ fn read_utf16_string(blob: &[u8], start: usize) -> String {
 }
 
 /// Heuristically extract VS_VERSIONINFO StringFileInfo fields from an
-/// RT_VERSION resource blob.
-///
-/// Rather than walking the exact (and fiddly, 4-byte-aligned, nested)
-/// VS_VERSIONINFO/StringFileInfo/StringTable/String structure, this scans
-/// the blob for each well-known field name encoded as UTF-16LE, then reads
-/// the UTF-16LE value that immediately follows (after the key's null
-/// terminator and 4-byte alignment padding). This is robust against minor
-/// structural variations and cannot panic on malformed input.
 pub fn parse_version_info(blob: &[u8]) -> VersionInfo {
     let mut info = VersionInfo::default();
     let mut i = 0usize;
@@ -531,9 +476,6 @@ const RT_ICON: u32 = 3;
 const RT_VERSION: u32 = 16;
 
 /// Walk the PE resource directory tree (Type → Name → Language → data) and
-/// collect (type_id, data_rva, size) for every leaf entry. The tree is
-/// always exactly 3 levels deep, so this never recurses beyond `level == 2`
-/// and cannot loop indefinitely even on a malformed/adversarial tree.
 fn walk_resource_dir(
     data: &[u8],
     rsrc_base_off: usize,
@@ -584,12 +526,6 @@ fn walk_resource_dir(
 }
 
 /// Parse the PE resource directory (data directory index 2) to extract
-/// VS_VERSIONINFO fields (RT_VERSION) and SHA-256 hashes of each RT_ICON
-/// resource (useful for cross-sample icon comparison — many cheats reuse
-/// a stolen or stock icon across builds).
-///
-/// Returns `(None, vec![])` if there is no resource directory, or it
-/// cannot be parsed.
 pub fn parse_pe_resources(
     data: &[u8],
     lfanew: u32,
@@ -639,7 +575,6 @@ pub fn parse_pe_resources(
 }
 
 /// Analyse a binary, returning the parsed info *and* the raw bytes so callers
-/// can pass them on to packing_hints / hashes without re-reading the file.
 pub fn analyze(path: &str, no_size_limit: bool) -> Result<(BinaryInfo, Vec<u8>)> {
     let data = read_file(path, no_size_limit)?;
     let entropy = shannon_entropy(&data);
@@ -693,8 +628,6 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
         .collect();
 
     // Enumerate actual TLS callback VAs from the data directory. Falling
-    // back to noting the .tls section by name if the directory walk finds
-    // nothing (e.g. a .tls section exists but has an empty callback array).
     let lfanew = pe.header.dos_header.pe_pointer;
     let callback_vas = parse_tls_callbacks(data, lfanew, pe.image_base as u64, &pe.sections);
     let tls_callbacks: Vec<String> = if !callback_vas.is_empty() {
@@ -755,8 +688,6 @@ fn parse_pe(path: &str, pe: &goblin::pe::PE, data: &[u8], entropy: f64) -> Resul
     }
 
     // Parse CLR metadata if this is a managed (.NET) assembly.
-    // Data directory 14 (COM_DESCRIPTOR) being non-zero is the definitive
-    // signal — unmanaged PE files leave it zeroed.
     let clr = crate::clr::parse_clr(data, lfanew, &pe.sections);
     if let Some(ref ci) = clr {
         headers.push(("Managed (.NET)".into(), "YES".into()));
@@ -876,9 +807,6 @@ fn parse_elf(path: &str, elf: &goblin::elf::Elf, data: &[u8], entropy: f64) -> R
     ];
 
     // ELF does not map individual symbols to their source library at the
-    // symbol-table level (unlike PE's import descriptor table).  We list
-    // unresolved dynamic symbols and note the required shared libraries
-    // separately so callers get accurate data instead of a cross-product.
     let imports: Vec<ImportEntry> = elf
         .dynsyms
         .iter()
@@ -1102,7 +1030,6 @@ pub fn categorize_strings(strings: &[String]) -> CategorizedStrings {
 }
 
 /// Search binary for a hex byte pattern with `??` wildcards.
-/// Returns a list of offsets where the pattern matched.
 pub fn pattern_search(data: &[u8], pattern: &str) -> Result<Vec<usize>> {
     let tokens: Vec<&str> = pattern.split_whitespace().collect();
     if tokens.is_empty() {
@@ -1140,7 +1067,6 @@ pub fn pattern_search(data: &[u8], pattern: &str) -> Result<Vec<usize>> {
 }
 
 /// Returns `(offset, size, base_va, is_64)` for the first executable section.
-/// Takes pre-read bytes to avoid a redundant file read.
 pub fn code_section_from_bytes(data: &[u8]) -> Result<(usize, usize, u64, bool)> {
     match Object::parse(data)? {
         Object::PE(pe) => {

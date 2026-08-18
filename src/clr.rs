@@ -1,14 +1,4 @@
 /// CLR / .NET metadata parser for sigil.
-///
-/// .NET assemblies are PE files with a CLR header in data directory index 14
-/// (IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR, also called the COR20 header).
-/// This module reads that header, walks the metadata stream heap to extract
-/// assembly identity (name, version, culture, MVID), the TypeDef table for
-/// class/namespace enumeration, and the CustomAttribute table for a handful
-/// of obfuscator markers.
-///
-/// Everything here is pure static parsing — no JIT, no execution. The same
-/// approach used by dnSpy, ILSpy, Mono.Cecil, and ILDASM.
 use crate::analyzer::{pe_data_directory, rva_to_offset};
 use goblin::pe::section_table::SectionTable;
 use serde::{Deserialize, Serialize};
@@ -16,18 +6,12 @@ use serde::{Deserialize, Serialize};
 // ── public types ─────────────────────────────────────────────────────────────
 
 /// High-level summary of a .NET assembly extracted from the PE CLR header
-/// and the #~ / #- metadata stream.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClrInfo {
     /// CLR runtime version string from the metadata root header
-    /// (e.g. "v4.0.30319"). Not the same as the .NET SDK version.
     pub runtime_version: String,
 
     /// CLR header flags (IMAGE_COR20_HEADER.Flags):
-    ///   0x01 = ILONLY   — pure-IL binary, no native code
-    ///   0x02 = 32BITREQUIRED — pinned to 32-bit
-    ///   0x08 = STRONGNAMESIGNED
-    ///   0x10 = NATIVEENTRYPOINT
     pub clr_flags: u32,
 
     /// Human-readable interpretation of the CLR flags
@@ -40,42 +24,30 @@ pub struct ClrInfo {
     pub assembly_version: Option<String>,
 
     /// Target culture/locale (e.g. "neutral", "en-US"). "neutral" is the
-    /// normal value for a non-localised assembly.
     pub culture: Option<String>,
 
     /// Module Version Identifier — a GUID that uniquely identifies this
-    /// *specific build* of the module. If two samples share an MVID they
-    /// are byte-for-byte identical modules (modulo the metadata stream
-    /// layout). Changes on every recompile.
     pub mvid: Option<String>,
 
     /// Namespaces encountered in the TypeDef table. Capped at 256 to keep
-    /// output manageable on large obfuscated assemblies.
     pub namespaces: Vec<String>,
 
     /// Type (class/struct/enum/interface) names from the TypeDef table.
-    /// Capped at 256. On heavily obfuscated samples these are typically
-    /// single letters or random strings.
     pub type_names: Vec<String>,
 
     /// Obfuscator markers detected in the CustomAttribute table or as
-    /// known namespace/type patterns in the TypeDef table.
     pub obfuscator_hints: Vec<String>,
 
     /// C#-specific cheat pattern hits — known namespace / type / attribute
-    /// patterns associated with game cheat and ESP toolkits.
     pub cheat_pattern_hits: Vec<CheatHit>,
 
     /// Whether the binary is MSIL-only (no native code stub beyond the
-    /// tiny managed PE bootstrap). Implies it needs the .NET runtime to run.
     pub is_ilonly: bool,
 
     /// Whether the binary declares itself as requiring 32-bit execution
-    /// (common in older Unity and Cheat Engine hook templates).
     pub requires_32bit: bool,
 
     /// Whether the assembly claims a strong-name signature. Note: presence
-    /// of the flag does NOT mean the signature has been verified.
     pub strong_name_signed: bool,
 }
 
@@ -107,9 +79,6 @@ fn r32(b: &[u8], o: usize) -> u32 {
 // ── GUID formatting ───────────────────────────────────────────────────────────
 
 /// Format a 16-byte slice as an RFC 4122 GUID string
-/// {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}.
-/// The first three components are little-endian; the last two are big-endian,
-/// matching how CLR stores MVIDs.
 fn format_guid(b: &[u8]) -> String {
     if b.len() < 16 {
         return "(invalid guid)".into();
@@ -159,9 +128,6 @@ fn decode_clr_flags(flags: u32) -> Vec<String> {
 // ── metadata stream parser ────────────────────────────────────────────────────
 
 /// Raw metadata parsed from a single CLR heap / stream. We need:
-/// - `#Strings` — the interned string heap (null-terminated UTF-8)
-/// - `#GUID`    — the GUID heap (packed 16-byte blocks)
-/// - `#~` or `#-` — the compressed/uncompressed logical metadata tables
 struct MetadataStreams<'a> {
     strings: &'a [u8],
     guid: &'a [u8],
@@ -169,8 +135,6 @@ struct MetadataStreams<'a> {
 }
 
 /// Parse the metadata root header and locate the three streams we need.
-/// Returns None if the buffer doesn't look like a valid metadata root
-/// (wrong magic, truncated, etc.).
 fn find_metadata_streams<'a>(md: &'a [u8]) -> Option<MetadataStreams<'a>> {
     // Metadata root: 4-byte magic 0x424A5342 ("BSJB")
     if md.len() < 20 || r32(md, 0) != 0x424A_5342 {
@@ -178,7 +142,6 @@ fn find_metadata_streams<'a>(md: &'a [u8]) -> Option<MetadataStreams<'a>> {
     }
 
     // Runtime version string: offset 12, 4-byte length, then the string
-    // We skip past it to find the stream count.
     let ver_len = r32(md, 12) as usize;
     let after_ver = 16 + ver_len;
     // 2-byte flags at after_ver, then 2-byte stream count
@@ -234,8 +197,6 @@ fn find_metadata_streams<'a>(md: &'a [u8]) -> Option<MetadataStreams<'a>> {
 }
 
 /// Read a null-terminated UTF-8 string from the #Strings heap at the given
-/// offset. Returns an empty string if the offset is out of range or the
-/// heap is empty.
 fn strings_at(heap: &[u8], offset: usize) -> &str {
     if offset >= heap.len() {
         return "";
@@ -251,12 +212,6 @@ fn strings_at(heap: &[u8], offset: usize) -> &str {
 // ── metadata table decoder ────────────────────────────────────────────────────
 
 /// Column width in bytes for a given index type:
-/// - string/blob/guid indices are 2 or 4 bytes depending on heap size
-/// - table row indices are 2 or 4 bytes depending on table row count
-///
-/// `wide_strings` / `wide_guid` / `wide_blob` come from the HeapSizes
-/// byte in the #~ stream header (bits 0/1/2 set = 4-byte index for that
-/// heap; clear = 2-byte index).
 struct ColWidths {
     string: usize,
     guid: usize,
@@ -296,12 +251,6 @@ type DecodedTables = (
 );
 
 /// Parse the #~ stream tables header and extract the information we need.
-///
-/// Returns a tuple of:
-/// - assembly name, version, culture from the Assembly table
-/// - MVID GUID index from the Module table
-/// - type/namespace pairs from the TypeDef table (capped at 512)
-/// - CustomAttribute raw type references for obfuscator/cheat scanning
 fn decode_tables(tables: &[u8], strings: &[u8], guid: &[u8]) -> Option<DecodedTables> {
     if tables.len() < 24 {
         return None;
@@ -338,7 +287,6 @@ fn decode_tables(tables: &[u8], strings: &[u8], guid: &[u8]) -> Option<DecodedTa
     };
 
     // ── Module table (TBL_MODULE = 0x00) ─────────────────────────────────────
-    // Layout: Generation(u16) | Name(String) | Mvid(Guid) | EncId(Guid) | EncBaseId(Guid)
     let module_base = p;
     let mvid = if valid & (1 << TBL_MODULE) != 0
         && module_base + 2 + cw.string + cw.guid <= tables.len()
@@ -361,10 +309,6 @@ fn decode_tables(tables: &[u8], strings: &[u8], guid: &[u8]) -> Option<DecodedTa
     p = module_base + module_rows * module_row_sz;
 
     // ── TypeRef table (TBL_TYPEREF = 0x01) ───────────────────────────────────
-    // We don't need TypeRef data but must skip past it to reach TypeDef.
-    // Layout: ResolutionScope(coded index) | Name(String) | Namespace(String)
-    // ResolutionScope is a 2-bit coded index into {Module,ModuleRef,AssemblyRef,TypeRef};
-    // its width depends on max rows across those 4 tables.
     let resolution_scope_max = [
         row_counts[TBL_MODULE] as usize,
         row_counts[0x1A] as usize, // ModuleRef
@@ -385,10 +329,6 @@ fn decode_tables(tables: &[u8], strings: &[u8], guid: &[u8]) -> Option<DecodedTa
     p += typeref_rows * typeref_row_sz;
 
     // ── TypeDef table (TBL_TYPEDEF = 0x02) ───────────────────────────────────
-    // Layout: Flags(u32) | TypeName(String) | TypeNamespace(String) |
-    //         Extends(coded) | FieldList(table idx) | MethodList(table idx)
-    // Extends is a TypeDefOrRef coded index (2-bit tag) into
-    // {TypeDef,TypeRef,TypeSpec}; we only use name/namespace so skip Extends.
     let typedef_base = p;
     let extends_max = [
         row_counts[TBL_TYPEDEF] as usize,
@@ -424,49 +364,16 @@ fn decode_tables(tables: &[u8], strings: &[u8], guid: &[u8]) -> Option<DecodedTa
     p += row_counts[TBL_TYPEDEF] as usize * typedef_row_sz;
 
     // Skip many tables to reach Assembly (0x20 = 32):
-    // Field(4), MethodDef(6), Param(8), InterfaceImpl(9), MemberRef(10),
-    // Constant(11), CustomAttribute(12), FieldMarshal(13), DeclSecurity(14),
-    // ClassLayout(15), FieldLayout(16), StandAloneSig(17), EventMap(18),
-    // EventPtr(19), Event(20), PropertyMap(21), PropertyPtr(22), Property(23),
-    // MethodSemantics(24), MethodImpl(25), ModuleRef(26), TypeSpec(27),
-    // ImplMap(28), FieldRVA(29), ENCLog(30), ENCMap(31) — 28 tables to skip.
-    // Rather than compute each table's exact row size (which would require
-    // knowing many more coded-index widths), we read the Assembly table
-    // directly by counting set bits below it in the valid mask.
-    // This is the standard approach used by lightweight metadata readers.
-    //
-    // We simply track p through the tables we've already counted, then use
-    // the fact that we need to jump to where the Assembly table begins.
-    // Since we want assembly info and the row structure is fixed-width, we
-    // do a bounds-safe forward scan for the Assembly table offset.
 
     // Assembly table (0x20): fixed row size = 4+2+2+2+2+4+4+blob+string+string+string
-    // = 16 + cw.blob + cw.string*3
-    // We'll locate it by skipping each intermediate table using row counts we know.
-    // For tables we don't need, we compute minimum safe row sizes to skip past them.
 
     // Helper: skip a batch of tables between `from` and `to` (exclusive) using
-    // known row counts, applying conservative row-size lower bounds where we
-    // don't need the actual data.
-    // We use a simplified approach: for tables we haven't decoded yet, compute
-    // just enough columns to get the correct row size.
 
     // ── skip to Assembly table ────────────────────────────────────────────────
-    // Tables 4–31 (Field..ENCMap) in order:
-    // We need exact row sizes only for tables that are present.
-    // Conservative known sizes (these are defined in ECMA-335 §II.22.*):
 
     // Rather than encode every table's exact schema here, we use the
-    // safe technique of computing the Assembly table pointer by parsing
-    // through the row-count list. Since the tables stream is densely packed
-    // and we already know p points to Field(4), we can compute how many
-    // bytes each intermediate table occupies.
 
     // The sizes below are the *minimum correct* row sizes given our ColWidths.
-    // For coded indices we use the larger (4-byte) size conservatively when
-    // we cannot determine the exact coded-index width without more state.
-    // This may cause us to overshoot on small assemblies; we guard with a
-    // bounds check and fall back to None.
 
     let type_or_method_def_max = [row_counts[TBL_TYPEDEF] as usize, row_counts[0x06] as usize]
         .iter()
@@ -578,17 +485,12 @@ fn decode_tables(tables: &[u8], strings: &[u8], guid: &[u8]) -> Option<DecodedTa
             p = p.saturating_add(rows * row_sz);
             if p > tables.len() {
                 // If we've overshot, Assembly table is inaccessible from here;
-                // return what we have with no assembly info rather than panicking.
                 return Some((None, None, None, mvid, types));
             }
         }
     }
 
     // ── Assembly table (TBL_ASSEMBLY = 0x20) ─────────────────────────────────
-    // Layout (ECMA-335 §II.22.2):
-    //   HashAlgId(u32) | MajorVersion(u16) | MinorVersion(u16) |
-    //   BuildNumber(u16) | RevisionNumber(u16) |
-    //   Flags(u32) | PublicKey(Blob) | Name(String) | Culture(String)
     let assembly_base = p;
     let assembly_rows = row_counts[TBL_ASSEMBLY] as usize;
     if assembly_rows == 0 || assembly_base + 16 + cw.blob + cw.string * 2 > tables.len() {
@@ -628,9 +530,6 @@ fn decode_tables(tables: &[u8], strings: &[u8], guid: &[u8]) -> Option<DecodedTa
 // ── obfuscator / cheat pattern detection ─────────────────────────────────────
 
 /// Known obfuscator marker namespaces and type patterns.
-/// These appear in the TypeDef table when an obfuscator injects marker
-/// attributes or leaves residual scaffolding. Source: public obfuscator
-/// documentation and public .NET obfuscation research.
 static OBFUSCATOR_PATTERNS: &[(&str, &str)] = &[
     ("ConfuserEx", "ConfuserEx marker namespace or type"),
     ("Confuser", "Confuser / ConfuserEx residual"),
@@ -655,10 +554,6 @@ static OBFUSCATOR_PATTERNS: &[(&str, &str)] = &[
 ];
 
 /// Known C# cheat / game-hack namespace and type patterns.
-/// These are namespaces, class prefixes, or base types commonly found in
-/// public C# cheat frameworks, ESP overlays, and Unity game-hack templates.
-/// Sources: public GitHub cheat repositories, public anti-cheat research,
-/// and published malware analysis reports — no NDA-covered sources.
 static CHEAT_PATTERNS: &[(&str, &str, &str)] = &[
     // Process memory reading helpers (the bread and butter of external cheats)
     (
@@ -795,7 +690,6 @@ fn scan_types(types: &[(String, String)]) -> (Vec<String>, Vec<CheatHit>) {
         }
 
         // Cheat patterns: match ns prefix against pattern[0], optional
-        // name substring match against pattern[1] if non-empty.
         for &(ns_pat, name_pat, desc) in CHEAT_PATTERNS {
             let np_lo = ns_pat.to_lowercase();
             if !ns_lo.contains(&np_lo) && !name_lo.contains(&np_lo) {
@@ -819,20 +713,8 @@ fn scan_types(types: &[(String, String)]) -> (Vec<String>, Vec<CheatHit>) {
 }
 
 /// Parse CLR metadata from a PE binary.
-///
-/// Returns `None` if data directory 14 (COM_DESCRIPTOR) is absent or zero,
-/// i.e. the binary is not a .NET assembly. Returns `Some(ClrInfo)` with
-/// as much information as could be safely extracted even if parts of the
-/// metadata are corrupt or truncated.
-///
-/// # Arguments
-/// * `data`     — full PE file bytes
-/// * `lfanew`   — pe_pointer from the DOS header (offset of the PE signature)
-/// * `sections` — section table from the parsed PE header
 pub fn parse_clr(data: &[u8], lfanew: u32, sections: &[SectionTable]) -> Option<ClrInfo> {
     // ── locate the CLR header ─────────────────────────────────────────────────
-    // Data directory index 14 = IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR.
-    // When present its RVA points to IMAGE_COR20_HEADER (also: COR20 header).
     let (clr_rva, clr_size) = pe_data_directory(data, lfanew, 14);
     if clr_rva == 0 || clr_size < 8 {
         return None; // Not a .NET assembly
@@ -843,15 +725,6 @@ pub fn parse_clr(data: &[u8], lfanew: u32, sections: &[SectionTable]) -> Option<
     }
 
     // IMAGE_COR20_HEADER layout (ECMA-335 §II.25.3.3):
-    //   Offset  Size  Field
-    //      0     4    cb (header size, always 72)
-    //      4     2    MajorRuntimeVersion
-    //      6     2    MinorRuntimeVersion
-    //      8     4    MetaData.VirtualAddress
-    //     12     4    MetaData.Size
-    //     16     4    Flags
-    //     20     4    EntryPointToken or EntryPointRVA
-    //   ... 14 more data directory pairs follow (we don't use them here)
     let meta_rva = r32(data, clr_off + 8);
     let _meta_sz = r32(data, clr_off + 12);
     let clr_flags = r32(data, clr_off + 16);
@@ -864,8 +737,6 @@ pub fn parse_clr(data: &[u8], lfanew: u32, sections: &[SectionTable]) -> Option<
     let metadata = &data[meta_off..];
 
     // ── extract runtime version string ────────────────────────────────────────
-    // Bytes 12–15: 4-byte length of the version string (not null-terminated
-    // in the length, but the field is padded to 4-byte alignment with '\0')
     let runtime_version = if metadata.len() >= 16 {
         let ver_len = (r32(metadata, 12) as usize).min(256);
         if 16 + ver_len <= metadata.len() {
@@ -886,7 +757,6 @@ pub fn parse_clr(data: &[u8], lfanew: u32, sections: &[SectionTable]) -> Option<
         Some(s) => s,
         None => {
             // We could still report the CLR header flags even if the
-            // metadata streams are unreadable (e.g. packed/obfuscated).
             return Some(ClrInfo {
                 runtime_version,
                 clr_flags,
@@ -956,7 +826,6 @@ pub fn parse_clr(data: &[u8], lfanew: u32, sections: &[SectionTable]) -> Option<
 }
 
 // Public pattern slices are retained for integration tests, which compile as a
-// separate crate and therefore cannot access test-only private items.
 #[allow(dead_code)]
 pub static OBFUSCATOR_PATTERNS_FOR_TEST: &[(&str, &str)] = OBFUSCATOR_PATTERNS;
 

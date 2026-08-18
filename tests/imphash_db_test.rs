@@ -1,11 +1,8 @@
 /// Tests for sigs::load_imphash_db and sigs::check_imphash_db — loading an
-/// external imphash database (MalwareBazaar export format) and checking
-/// computed imphashes against it.
 use sigil::sigs::{check_imphash_db, load_imphash_db};
 use std::io::Write;
 
 /// Write `content` to a temp file and return its path. The file is cleaned
-/// up when the returned TempFile is dropped.
 struct TempFile(std::path::PathBuf);
 impl TempFile {
     fn new(name: &str, content: &str) -> Self {
@@ -34,7 +31,6 @@ fn loads_csv_with_header_row() {
     let db = load_imphash_db(f.path()).unwrap();
 
     // The header row's first field ("imphash") is not 32 hex chars, so it's
-    // skipped automatically — only the 2 real entries remain.
     assert_eq!(db.len(), 2);
     assert_eq!(db[0].hash, "a909b3c8d3d1ce4ae0a4f607a37a8129");
     assert_eq!(db[0].description, "CobaltStrike");

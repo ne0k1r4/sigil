@@ -19,7 +19,6 @@ pub fn compute(path: &str, no_size_limit: bool) -> Result<Hashes> {
 }
 
 /// Compute hashes from pre-read bytes — use this when you already have the
-/// data in memory to avoid a redundant read.
 pub fn from_bytes(data: &[u8]) -> Hashes {
     let md5 = format!("{:x}", md5::compute(data));
     let sha256 = format!("{:x}", Sha256::digest(data));

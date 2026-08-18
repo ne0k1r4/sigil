@@ -1,5 +1,4 @@
 /// Tests for the new analysis features: Rich header parsing and TLS
-/// callback enumeration (analyzer.rs additions).
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
@@ -19,7 +18,6 @@ mod rich_header {
     #[test]
     fn minimal_pe_has_no_rich_header() {
         // Our hand-crafted minimal PE has a 64-byte DOS stub with no Rich
-        // marker — parse_rich_header should return None cleanly, not panic.
         let data = read_file(&fixture("minimal.exe"), false).unwrap();
         let lfanew = 64u32; // matches the fixture generator
         assert!(parse_rich_header(&data, lfanew).is_none());
@@ -41,8 +39,6 @@ mod rich_header {
     #[test]
     fn synthetic_rich_header_parses_and_hashes() {
         // Build a minimal buffer containing a valid Rich header structure:
-        // [0x80] "DanS" XOR key, 3 zero dwords XOR key, then N (compid,count)
-        // pairs XOR key, then "Rich" + key.
         let key: u32 = 0xDEAD_BEEF;
         let mut data = vec![0u8; 0x200];
 

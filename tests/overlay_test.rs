@@ -2,8 +2,6 @@ use goblin::Object;
 use sha2::Digest;
 use sigil::analyzer::{compute_overlay_info, read_file, shannon_entropy};
 /// Tests for compute_overlay_info — detecting trailing data appended after
-/// the last PE section ("overlay"): common in SFX archives, installers,
-/// and Authenticode-signed binaries.
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
@@ -16,7 +14,6 @@ fn fixture(name: &str) -> String {
 #[test]
 fn minimal_pe_has_no_overlay() {
     // Our hand-crafted minimal PE ends exactly at the end of .data —
-    // there should be no overlay.
     let data = read_file(&fixture("minimal.exe"), false).unwrap();
     let pe = match Object::parse(&data).unwrap() {
         Object::PE(pe) => pe,
@@ -33,7 +30,6 @@ fn minimal_pe_has_no_overlay() {
 #[test]
 fn appended_bytes_are_detected_as_overlay() {
     // Take the minimal PE and append extra bytes — these should be
-    // reported as an overlay with the correct offset/size/hash/entropy.
     let mut data = read_file(&fixture("minimal.exe"), false).unwrap();
     let original_len = data.len();
 

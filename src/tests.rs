@@ -95,8 +95,6 @@ mod unit_tests {
     #[test]
     fn test_rich_header_basic() {
         // build a minimal fake PE stub with a valid rich header
-        // layout: 0x00..0x3C = MZ stub, lfanew @ 0x3C points to 0x200
-        // 0x80..end of rich = encoded DanS + entries + "Rich" + key
         let lfanew: u32 = 0x200;
         let key: u32 = 0xDEADBEEF;
         let dans_marker: u32 = 0x536E_6144; // "DanS"
@@ -219,7 +217,6 @@ mod unit_tests {
         };
 
         // scan with ext sigs — should find both the built-in IsDebuggerPresent
-        // AND our custom MyCustomFunc
         let hits = scan_antidebug(&imports, &strings, Some(&ext));
         let custom_hit = hits.iter().find(|h| h.matched.contains("MyCustomFunc"));
         assert!(custom_hit.is_some(), "external sig should produce a hit");

@@ -77,7 +77,6 @@ fn build_cs(arch: &str, is_64: bool) -> Result<Capstone> {
 }
 
 /// Disassemble a fixed number of instructions from a code buffer.
-/// Used by the existing `disasm` subcommand (entry point only).
 pub fn disassemble(code: &[u8], base_addr: u64, is_64: bool, count: usize) -> Result<Vec<Insn>> {
     let cs = build_cs(if is_64 { "x86_64" } else { "x86" }, is_64)?;
     let insns = cs
@@ -101,15 +100,6 @@ pub fn disassemble(code: &[u8], base_addr: u64, is_64: bool, count: usize) -> Re
 }
 
 /// Disassemble all executable sections of a PE or ELF binary.
-///
-/// For each executable section:
-/// - Disassembles all instructions (capped at `max_insns_per_section` to
-///   prevent runaway on huge binaries; pass `usize::MAX` for no cap)
-/// - Collects call targets (direct CALL instruction operands)
-/// - Builds a mnemonic frequency table across all sections
-///
-/// Returns a `FullDisasm` summary suitable for JSON output or further
-/// analysis.
 pub fn disassemble_full(data: &[u8], max_insns_per_section: usize) -> Result<FullDisasm> {
     match Object::parse(data)? {
         Object::PE(pe) => {

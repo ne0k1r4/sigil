@@ -1,9 +1,5 @@
 use sigil::analyzer::{parse_authenticode, pe_data_directory, read_file};
 /// Tests for parse_authenticode and pe_data_directory — Authenticode
-/// certificate table detection and heuristic identity-string extraction.
-///
-/// NOTE: parse_authenticode is a triage signal only (presence + readable
-/// strings from the cert blob), not signature verification.
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
@@ -30,9 +26,6 @@ fn pe_data_directory_out_of_bounds_returns_zero() {
 #[test]
 fn synthetic_certificate_table_extracts_identity_strings() {
     // Build a minimal PE32+ optional header skeleton with a certificate
-    // table data directory (index 4) pointing at a fake WIN_CERTIFICATE
-    // containing readable "identity-like" strings, as would appear inside
-    // a DER-encoded X.509 certificate's Subject/Issuer fields.
     let lfanew = 0x80u32;
     let mut data = vec![0u8; 0x400];
 

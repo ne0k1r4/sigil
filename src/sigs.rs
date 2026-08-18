@@ -171,7 +171,6 @@ pub struct ExternalSigs {
 }
 
 /// load external sig rules from a json file — lets you add your
-/// own patterns without recompiling the whole thing
 pub fn load_external_sigs(path: &str) -> anyhow::Result<ExternalSigs> {
     let data = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("cant read sigs file '{}': {}", path, e))?;
@@ -299,11 +298,6 @@ pub fn scan_anticheat(
 }
 
 // ── user-config-aware variants ────────────────────────────────────────────
-//
-// These wrap the built-in scanners above and additionally check entries
-// loaded from ~/.sigil.toml (see config.rs). Kept separate from
-// scan_antidebug/scan_anticheat so existing callers and tests that only
-// care about the built-in tables are unaffected.
 
 use crate::config::SigEntry;
 
@@ -372,21 +366,8 @@ pub fn scan_anticheat_with_config(
 // ── imphash clustering ───────────────────────────────────────────────────
 
 /// Small starter set of imphashes that have been widely reported in public
-/// threat-intel writeups. This is NOT a substitute for a real, current
-/// database — imphashes are toolchain-dependent and a single value can
-/// correspond to many different (and many *benign*) binaries built with
-/// the same compiler/linker/import set. Treat a hit here as "worth a closer
-/// look", not as a verdict.
-///
-/// For real coverage, load a MalwareBazaar-format imphash export via
-/// `--imphash-db <path>` (see `load_imphash_db` below) — get one from
-/// https://bazaar.abuse.ch/export/ — or add your own entries to
-/// `~/.sigil.toml` under `[[known_imphashes]]`.
 static KNOWN_IMPHASHES: &[(&str, &str)] = &[
     // Frequently cited in public reporting (2020-2023) as a default/common
-    // Cobalt Strike beacon imphash. Cobalt Strike imphashes vary by version
-    // and build options, so absence of a match means nothing — but a hit
-    // is a strong signal worth investigating.
     (
         "a909b3c8d3d1ce4ae0a4f607a37a8129",
         "Commonly-reported Cobalt Strike beacon imphash — verify against current samples",
@@ -394,7 +375,6 @@ static KNOWN_IMPHASHES: &[(&str, &str)] = &[
 ];
 
 /// A single imphash → description record, typically loaded from an
-/// external database file via `load_imphash_db`.
 #[derive(Debug, Clone)]
 pub struct ImphashRecord {
     pub hash: String,
@@ -402,13 +382,6 @@ pub struct ImphashRecord {
 }
 
 /// Load an imphash database from a CSV file.
-///
-/// Accepts the MalwareBazaar "imphash" export format
-/// (https://bazaar.abuse.ch/export/) — comma-separated lines of
-/// `imphash,signature[,...]`, optionally with a header row (any row whose
-/// first field is not a 32-character hex string is skipped, so a header
-/// like `imphash,signature` is handled automatically). Extra columns are
-/// ignored. Quoted fields (`"..."`) have their quotes stripped.
 pub fn load_imphash_db(path: &str) -> Result<Vec<ImphashRecord>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read imphash database '{}'", path))?;
@@ -440,7 +413,6 @@ pub fn load_imphash_db(path: &str) -> Result<Vec<ImphashRecord>> {
 }
 
 /// Check a computed imphash against an externally-loaded database (see
-/// `load_imphash_db`). Returns the matching record's description, if any.
 pub fn check_imphash_db(hash: &str, db: &[ImphashRecord]) -> Option<String> {
     let hash_lower = hash.to_lowercase();
     db.iter()
@@ -449,11 +421,6 @@ pub fn check_imphash_db(hash: &str, db: &[ImphashRecord]) -> Option<String> {
 }
 
 /// Check a computed imphash against the built-in starter table and any
-/// user-supplied entries from ~/.sigil.toml. Returns the description of
-/// the first match, if any.
-///
-/// For broader coverage, also check `check_imphash_db` against a loaded
-/// `--imphash-db` file.
 pub fn check_imphash(hash: &str, extra: &[SigEntry]) -> Option<String> {
     for &(h, desc) in KNOWN_IMPHASHES {
         if h.eq_ignore_ascii_case(hash) {

@@ -1,6 +1,4 @@
 /// Integration tests for sigil.
-/// Fixtures are pre-built minimal PE/ELF binaries in tests/fixtures/.
-/// Run with: cargo test
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
@@ -134,7 +132,6 @@ mod analyzer_elf {
     fn elf_imports_use_dynamic_library() {
         let (info, _) = analyze(&fixture("minimal.elf"), false).unwrap();
         // Minimal ELF has no dynamic symbols — imports list should be empty
-        // or any present should use "(dynamic)" not a cross-product of libraries
         for imp in &info.imports {
             assert_eq!(
                 imp.library, "(dynamic)",
@@ -483,8 +480,6 @@ mod size_cap {
     #[test]
     fn rejects_oversized_file_without_flag() {
         // We can't write a 256MB file in a test, so instead temporarily
-        // test that read_file succeeds with no_size_limit=true on a valid file
-        // and the function signature accepts the flag.
         let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         p.push("tests/fixtures/minimal.exe");
         let result = read_file(&p.to_string_lossy(), true);

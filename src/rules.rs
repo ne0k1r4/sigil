@@ -5,23 +5,6 @@ use serde::Deserialize;
 use std::fs;
 
 /// A single custom detection rule.
-///
-/// At least one of `hex_pattern` or `string_match` should be set; if both
-/// are set, both are evaluated independently and either can produce a hit.
-///
-/// Example rules file:
-/// ```toml
-/// [[rules]]
-/// name = "Custom packer stub"
-/// category = "packer"
-/// hex_pattern = "60 E8 ?? ?? ?? ?? 5D 81"
-///
-/// [[rules]]
-/// name = "Internal AC driver reference"
-/// category = "anti-cheat"
-/// string_match = "myac_driver"
-/// case_insensitive = true
-/// ```
 #[derive(Debug, Deserialize, Clone)]
 pub struct Rule {
     pub name: String,
@@ -52,10 +35,6 @@ pub fn load_rules(path: &str) -> Result<RuleFile> {
 }
 
 /// Evaluate custom rules against a binary's raw bytes and extracted strings.
-///
-/// For `hex_pattern` rules, all matches up to a sane cap are summarised in
-/// one hit (offset of the first match plus a count). For `string_match`
-/// rules, the first matching string is reported.
 pub fn scan_rules(rules: &RuleFile, data: &[u8], strings: &[String]) -> Vec<SigHit> {
     let mut hits = Vec::new();
 

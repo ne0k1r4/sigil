@@ -1,7 +1,6 @@
 use goblin::Object;
 use sigil::analyzer::{parse_pe_resources, pe_data_directory, read_file};
 /// Tests for parse_pe_resources — walking the PE resource directory tree
-/// to find VS_VERSIONINFO (RT_VERSION) and RT_ICON resources.
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {
@@ -40,8 +39,6 @@ fn out_of_bounds_lfanew_returns_empty_without_panic() {
 #[test]
 fn nonzero_rva_with_unresolvable_section_returns_empty() {
     // Build a buffer where data directory 2 has a non-zero RVA, but no
-    // section covers that RVA — rva_to_offset returns None, and
-    // parse_pe_resources must handle that gracefully.
     let lfanew = 0x80u32;
     let mut data = vec![0u8; 0x200];
     data[lfanew as usize..lfanew as usize + 4].copy_from_slice(b"PE\0\0");
