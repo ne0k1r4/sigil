@@ -2,3 +2,4 @@
 Cargo.lock
 tests/fixtures/minimal.elf
 tests/fixtures/minimal.exe
+/target
